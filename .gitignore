@@ -1,0 +1,16 @@
+# Build output (normally redirected to %LOCALAPPDATA%\SwVaultBuild by Directory.Build.props)
+artifacts/
+dist/
+bin/
+obj/
+TestResults/
+
+# IDE
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+
+# Local dev data
+*.log

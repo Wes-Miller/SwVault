@@ -1,0 +1,13 @@
+SwVault - install
+
+1. Install Git for Windows if you don't have it:  winget install Git.Git
+2. Close SOLIDWORKS.
+3. Right-click install.ps1 > Run with PowerShell (approve the administrator prompt).
+4. Click the SwVault icon in the system tray > Vaults... and enter:
+     - Repository URL   (from your admin, e.g. https://vault.example.edu/fsae/cad.git)
+     - User name and access token (create the token in the vault server: Settings > Applications)
+   Leave "Vault folder" empty to use the team's shared folder (e.g. C:\SWVault\FSAE).
+5. Open SOLIDWORKS. Use the SwVault tab and task pane. See the user guide for the basics.
+
+Problems? Run "swvault doctor" in a terminal and send the output to your admin.
+To remove: run uninstall.ps1.

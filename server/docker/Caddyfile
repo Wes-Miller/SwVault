@@ -1,0 +1,14 @@
+# Public hostname: Caddy gets a Let's Encrypt certificate automatically (needs ports 80/443
+# reachable from the internet). Campus-only / VPN-only server: set CADDY_TLS=internal in .env,
+# then install Caddy's root certificate (data/caddy/pki/authorities/local/root.crt) into
+# "Trusted Root Certification Authorities" on each PC (the SwVault installer can do this).
+{$VAULT_HOSTNAME} {
+	tls {$CADDY_TLS}
+	# No request size limit: LFS uploads of large assemblies go through here.
+	reverse_proxy gitea:3000 {
+		transport http {
+			read_timeout 30m
+			write_timeout 30m
+		}
+	}
+}

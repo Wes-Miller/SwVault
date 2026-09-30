@@ -1,0 +1,16 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/SwVault.AddIn/SwVault.AddIn.csproj" />
+    <Project Path="src/SwVault.Agent/SwVault.Agent.csproj" />
+    <Project Path="src/SwVault.Cli/SwVault.Cli.csproj" />
+    <Project Path="src/SwVault.Core/SwVault.Core.csproj" />
+    <Project Path="src/SwVault.Protocol/SwVault.Protocol.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/SwVault.Core.Tests/SwVault.Core.Tests.csproj" />
+    <Project Path="tests/SwVault.IntegrationTests/SwVault.IntegrationTests.csproj" />
+  </Folder>
+  <Folder Name="/tools/">
+    <Project Path="tools/SwApiCheck/SwApiCheck.csproj" />
+  </Folder>
+</Solution>

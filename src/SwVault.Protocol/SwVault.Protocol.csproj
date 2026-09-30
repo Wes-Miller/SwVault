@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Shared by the net48 add-in and the net10 agent. Must stay dependency-free:
+       anything referenced here gets loaded into SLDWORKS.exe. -->
+  <PropertyGroup>
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <Nullable>disable</Nullable>
+    <RootNamespace>SwVault.Protocol</RootNamespace>
+  </PropertyGroup>
+
+</Project>

@@ -1,0 +1,49 @@
+# SwVault vault server: Gitea (git + Git LFS + LFS file locking) behind Caddy (automatic HTTPS).
+#
+#   cp .env.example .env    # set VAULT_HOSTNAME
+#   docker compose up -d
+#
+# Data lives in ./data. Back it up nightly (see ../backup). Upgrades: bump the image tag, then
+# docker compose pull && docker compose up -d (read Gitea's release notes first).
+services:
+  gitea:
+    image: docker.gitea.com/gitea:1.27.3
+    restart: unless-stopped
+    environment:
+      USER_UID: "1000"
+      USER_GID: "1000"
+      GITEA__database__DB_TYPE: sqlite3
+      GITEA__server__DOMAIN: ${VAULT_HOSTNAME}
+      GITEA__server__ROOT_URL: https://${VAULT_HOSTNAME}/
+      GITEA__server__DISABLE_SSH: "true"
+      # Git LFS: content storage and the lock API SwVault uses for check-out.
+      GITEA__server__LFS_START_SERVER: "true"
+      GITEA__server__LFS_MAX_FILE_SIZE: "4294967296" # 4 GB per file
+      GITEA__repository__DEFAULT_BRANCH: main
+      # Accounts are created by admins (or via an OAuth login source), not by self-registration.
+      GITEA__service__DISABLE_REGISTRATION: "true"
+      GITEA__service__REQUIRE_SIGNIN_VIEW: "true"
+      # Lets Git Credential Manager do a browser sign-in instead of pasting tokens.
+      GITEA__oauth2__ENABLED: "true"
+      GITEA__log__LEVEL: Warn
+    volumes:
+      - ./data/gitea:/data
+      - /etc/timezone:/etc/timezone:ro
+      - /etc/localtime:/etc/localtime:ro
+    expose:
+      - "3000"
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    environment:
+      VAULT_HOSTNAME: ${VAULT_HOSTNAME}
+      CADDY_TLS: ${CADDY_TLS:-}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./data/caddy:/data
+    depends_on:
+      - gitea

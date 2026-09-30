@@ -1,0 +1,43 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Loaded inside SLDWORKS.exe: .NET Framework 4.8, x64, no third-party packages. -->
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <PlatformTarget>x64</PlatformTarget>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <Nullable>disable</Nullable>
+    <RootNamespace>SwVault.AddIn</RootNamespace>
+    <AssemblyName>SwVault.AddIn</AssemblyName>
+    <SwInstallDir Condition="'$(SwInstallDir)' == ''">C:\Program Files\SOLIDWORKS Corp\SOLIDWORKS</SwInstallDir>
+    <SwApiRedist>$(SwInstallDir)\api\redist</SwApiRedist>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- EmbedInteropTypes=false and copied locally so RegAsm can resolve ISwAddin during registration. -->
+    <Reference Include="SolidWorks.Interop.sldworks">
+      <HintPath>$(SwApiRedist)\SolidWorks.Interop.sldworks.dll</HintPath>
+      <EmbedInteropTypes>false</EmbedInteropTypes>
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="SolidWorks.Interop.swconst">
+      <HintPath>$(SwApiRedist)\SolidWorks.Interop.swconst.dll</HintPath>
+      <EmbedInteropTypes>false</EmbedInteropTypes>
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="SolidWorks.Interop.swpublished">
+      <HintPath>$(SwApiRedist)\SolidWorks.Interop.swpublished.dll</HintPath>
+      <EmbedInteropTypes>false</EmbedInteropTypes>
+      <Private>true</Private>
+    </Reference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\SwVault.Protocol\SwVault.Protocol.csproj" />
+  </ItemGroup>
+
+  <Target Name="CheckSolidWorksApi" BeforeTargets="ResolveAssemblyReferences" Condition="!Exists('$(SwApiRedist)\SolidWorks.Interop.sldworks.dll')">
+    <Error Text="SOLIDWORKS API assemblies were not found in $(SwApiRedist). Install SOLIDWORKS, or build with -p:SwInstallDir=&lt;folder containing api\redist&gt;." />
+  </Target>
+
+</Project>

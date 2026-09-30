@@ -1,0 +1,15 @@
+<Project>
+  <PropertyGroup>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Deterministic>true</Deterministic>
+    <Company>SwVault</Company>
+    <Product>SwVault</Product>
+    <Version>0.1.0</Version>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+    <!-- Keep bin/obj out of OneDrive-synced folders: sync churn and file locks break builds. -->
+    <ArtifactsPath Condition="'$(ArtifactsPath)' == '' and $(MSBuildThisFileDirectory.Contains('OneDrive'))">$(LOCALAPPDATA)\SwVaultBuild</ArtifactsPath>
+    <ArtifactsPath Condition="'$(ArtifactsPath)' == ''">$(MSBuildThisFileDirectory)artifacts</ArtifactsPath>
+  </PropertyGroup>
+</Project>
