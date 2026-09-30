@@ -93,6 +93,22 @@ namespace SwVault.AddIn.Ui
             _commands.Changed += _ => { _debounce.Stop(); _debounce.Start(); };
         }
 
+        /// <summary>"Front Suspension (2027 Car) - RE: bob, carol", or null when the file isn't in a subsystem.</summary>
+        private async Task<string> SubsystemTextAsync(string path)
+        {
+            try
+            {
+                var s = await _agent.SubsystemForAsync(path);
+                if (s == null) return null;
+                var engineers = s.Engineers != null && s.Engineers.Length > 0 ? string.Join(", ", s.Engineers) : "none yet";
+                return s.Name + " (" + s.Car + ") - RE: " + engineers;
+            }
+            catch (AgentException)
+            {
+                return null; // older agent or no team service: just leave it out
+            }
+        }
+
         /// <summary>The Add to Vault button was clicked; the add-in adds the active document.</summary>
         public event Action AddToVaultRequested;
 
@@ -320,8 +336,11 @@ namespace SwVault.AddIn.Ui
                     _active.BackColor = SystemColors.Control;
                     return;
                 }
+                var subsystem = await SubsystemTextAsync(path);
+                if (path != _activePath) return;
                 _active.Text = Path.GetFileName(path) + "  " + (status.ServerVersion > 0 ? "v" + status.ServerVersion + "  " : "") +
-                               (status.State ?? "") + (string.IsNullOrEmpty(status.Revision) ? "" : " rev " + status.Revision) + "\n" + VaultDialog.Describe(status);
+                               (status.State ?? "") + (string.IsNullOrEmpty(status.Revision) ? "" : " rev " + status.Revision) + "\n" + VaultDialog.Describe(status) +
+                               (subsystem == null ? "" : "\n" + subsystem);
                 _active.BackColor = status.LocalState == LocalState.Outdated || status.LocalState == LocalState.Conflict ? Color.FromArgb(255, 243, 205)
                     : status.LockState == LockState.MineHere ? Color.FromArgb(217, 234, 250)
                     : status.LockState == LockState.Other ? Color.FromArgb(250, 219, 216)

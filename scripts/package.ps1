@@ -9,6 +9,7 @@
     bin\team.json   (with -TeamConfig) which vault to join; members then only sign in
     addin\     SwVault.AddIn.dll (+ SOLIDWORKS interop and protocol DLLs)
     Install SwVault.cmd / install.ps1 / uninstall.ps1 / INSTALL.txt
+    swvault-package.json   {version}; the server reads it so agents can offer the update
   Teammates unzip it and double-click "Install SwVault.cmd" (one UAC prompt).
 
 .PARAMETER TeamConfig
@@ -17,6 +18,14 @@
 .PARAMETER Publish
   Upload the finished zip to the team's vault server, so invite links can offer it for download
   (https://<server>/swvault-invites/download). Asks for your admin user name and password.
+  Everyone's SwVault then offers the update (tray icon > Install update), so bump -Version.
+
+.PARAMETER Required
+  With -Publish: mark this update as required. SwVault keeps reminding people until they install it
+  (use it when a change needs everyone on the new version).
+
+.PARAMETER Notes
+  With -Publish: one line shown with the update notification, e.g. "Adds responsible engineers".
 
 .PARAMETER InviteCode
   Bake an invite code into this package (for a zip you hand out yourself, e.g. on a USB stick).
@@ -28,6 +37,8 @@
 
 .EXAMPLE
   .\scripts\package.ps1 -Version 0.2.0 -TeamConfig .\team.json -Publish
+.EXAMPLE
+  .\scripts\package.ps1 -Version 0.3.0 -TeamConfig .\team.json -Publish -Notes "Adds part numbering" -Required
 #>
 [CmdletBinding()]
 param(
@@ -35,9 +46,12 @@ param(
     [string]$TeamConfig,
     [string]$MinGitUrl,
     [switch]$Publish,
-    [string]$InviteCode
+    [string]$InviteCode,
+    [switch]$Required,
+    [string]$Notes
 )
 if ($Publish -and -not $TeamConfig) { throw '-Publish needs -TeamConfig (it says which server to publish to).' }
+if ($Version -notmatch '^\d+\.\d+\.\d+$') { throw "-Version must look like 1.2.3 (got '$Version')." }
 
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path $PSScriptRoot -Parent
@@ -98,6 +112,7 @@ Copy-Item (Join-Path $PSScriptRoot 'install\install.ps1') $stage
 Copy-Item (Join-Path $PSScriptRoot 'install\Install SwVault.cmd') $stage
 Copy-Item (Join-Path $PSScriptRoot 'install\uninstall.ps1') $stage
 Copy-Item (Join-Path $PSScriptRoot 'install\INSTALL.txt') $stage
+@{ version = $Version } | ConvertTo-Json | Set-Content (Join-Path $stage 'swvault-package.json') -Encoding ASCII
 
 if (Test-Path $zip) { Remove-Item $zip -Force }
 Compress-Archive -Path (Join-Path $stage '*') -DestinationPath $zip
@@ -112,7 +127,12 @@ if ($Publish) {
     $pair = "$($credential.UserName):$($credential.GetNetworkCredential().Password)"
     $headers = @{ Authorization = 'Basic ' + [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($pair)) }
     Write-Host "Uploading to $base ..."
-    Invoke-RestMethod -Method Put -Uri "${base}swvault-invites/installer" -Headers $headers -InFile $zip -ContentType 'application/zip' | Out-Null
-    Write-Host "Published: ${base}swvault-invites/download"
+    $query = @()
+    if ($Required) { $query += 'required=1' }
+    if ($Notes) { $query += 'notes=' + [Uri]::EscapeDataString($Notes) }
+    $uri = "${base}swvault-invites/installer" + $(if ($query) { '?' + ($query -join '&') } else { '' })
+    $published = Invoke-RestMethod -Method Put -Uri $uri -Headers $headers -InFile $zip -ContentType 'application/zip'
+    Write-Host "Published SwVault $($published.version): ${base}swvault-invites/download"
+    Write-Host "Everyone's SwVault offers the update within a few hours (or right away: tray icon > Check for updates)."
     Write-Host 'Invite people from SOLIDWORKS (SwVault tab > Invite People) or the tray icon.'
 }

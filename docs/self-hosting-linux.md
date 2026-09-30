@@ -94,7 +94,22 @@ This produces `dist\SwVault-FSAE-0.2.0.zip`, containing:
 - **MinGit**, a portable Git that the script downloads, so members don't install Git;
 - `team.json`, so the installer knows which vault to join.
 
-`-Publish` asks for your admin user name and password and uploads the zip to the server. Invite links then download it from `https://<server>/swvault-invites/download`. Run the same command again whenever you update SwVault. Without `-Publish`, share the zip yourself (for example on a shared drive).
+`-Publish` asks for your admin user name and password and uploads the zip to the server. Invite links then download it from `https://<server>/swvault-invites/download`. Without `-Publish`, share the zip yourself (for example on a shared drive).
+
+### Pushing an update to the whole team
+
+Build with a higher `-Version` and publish it:
+
+```powershell
+.\scripts\package.ps1 -Version 0.3.0 -TeamConfig .\team.json -Publish -Notes "Adds part numbering"
+```
+
+Every SwVault checks the server a minute after it starts and every 4 hours after that. When it finds a newer version, it shows a notification (with your notes) and a bold **Install update 0.3.0...** item on the tray icon. Clicking either one downloads the update, checks it against the SHA-256 the server recorded, waits until SOLIDWORKS is closed (it tells the member to close it), and installs it silently. The only prompt is Windows' administrator prompt. The new version then says "SwVault updated to 0.3.0". Members can also use tray icon → **Check for updates**.
+
+- **`-Required`**: for changes everyone must have (for example a new vault format). The reminder then comes back at every check until they install it. Updates are never forced in the middle of someone's work.
+- From the server instead: `sudo ./swvault-admin.sh publish-installer SwVault-FSAE-0.3.0.zip --notes "..." [--required]`.
+- The newest published zip is also what invite links download, so new members always get the current version.
+- Only installs in `C:\Program Files\SwVault` update themselves. Developer builds don't.
 
 ## 4. Sign in once yourself
 
@@ -127,11 +142,14 @@ The invite's limits (number of people, expiry, one account per email address) an
 
 ## Subteam leads and review requests
 
-Everyone is either a **general member** or a **subteam lead** (with the subteam's name). People pick this when they join, and change it with the tray icon → **My team role...**. Existing accounts are asked once after signing in. An admin can also set it: `sudo ./swvault-admin.sh set-lead eli Suspension` or `set-lead eli --member`.
+Everyone is either a **general member** or a **subteam lead** (with the subteam's name). People pick this when they join, and change it with the tray icon → **My team role...**. Existing accounts are asked once after signing in. **Becoming a lead needs an admin's approval** (stepping down doesn't): admins get a tray notification and an email, and approve in the tray icon → **Approvals...** or with `sudo ./swvault-admin.sh approvals` / `approve eli lead` / `decline eli lead`. An admin can also set it directly: `sudo ./swvault-admin.sh set-lead eli Suspension` or `set-lead eli --member`.
+
+**Cars, subsystems and responsible engineers (REs).** Members add cars and their subsystems (each a vault folder) in **SwVault tab → Subsystems**, and ask to be an RE of a subsystem; a subsystem can have several. RE requests also need an admin's approval, the same way (`approve eli "Front Suspension"`, or the subsystem id if two share a name; `cars` lists cars, subsystems, their ids and REs). REs are notified of check-ins, new files and releases in their subsystem, and are copied on review requests general members make for it. The list is kept in the team service (`subsystems.json`) and backed up nightly with the other team data.
 
 Members ask a lead for a review from SOLIDWORKS: open the file, then **SwVault tab → Request Review**. They choose **Design**, **Simulation** or **Drawing**, pick the lead (the list shows each lead's subteam) and add a note. The file must be checked in, so the lead reviews that exact version.
 
 - **The lead** gets an email and a tray notification, and sees the request under **SwVault tab → Reviews → For me**. From there they open the file, then **Approve**, **Request changes** (with feedback) or **Comment**.
+- **The subsystem's REs** (when a general member asked) are copied: an email and a notification, and the request under **Reviews → Copied to me (RE)**.
 - **The member** gets an email and a notification when the lead approves or sends it back, with the lead's feedback. They see all their requests under **Reviews → My requests**, where they can reply or cancel.
 
 Each request is also an issue in the vault repository on the server's web page (assigned to the lead, labeled with its kind and status), so the full discussion is kept and backed up. Emails go out once per event: the request opening, an approval, and each round of changes requested. They're only sent to people whose account has a real email address (everyone who joined with an invite does).
@@ -142,9 +160,10 @@ Each request is also an issue in the vault repository on the server's web page (
 |---|---|
 | Is everything up and reachable? | `sudo ./swvault-admin.sh status` |
 | Invite people | SOLIDWORKS: SwVault tab → **Invite People**. Server: `invite [--viewer] [--uses N] [--days N]`, `invites`, `revoke-invite <code>` |
-| Publish a new installer | `scripts\package.ps1 ... -Publish` (Windows) or `publish-installer <zip>` |
+| Push an update to everyone | `scripts\package.ps1 -Version <higher> ... -Publish [-Notes "..."] [-Required]` (Windows) or `publish-installer <zip> [--notes "..."] [--required]` |
 | Add / list people | `add-user <name> [--viewer\|--approver\|--admin] [--email a@colorado.edu]`, `list-users` (shows each person's team role) |
 | Mark a subteam lead | `set-lead <name> <subteam>`, `set-lead <name> --member` |
+| Lead and RE requests | `approvals`, `approve <name> lead\|<subsystem>`, `decline <name> lead\|<subsystem>`, `cars` |
 | Check email works | `test-email <address>` |
 | Forgotten password | `reset-password <name>` |
 | Someone leaves | `disable-user <name>`. They can't sign in, and their history is kept. Undo with `enable-user`. |
@@ -160,7 +179,7 @@ Run all of them with `sudo ./swvault-admin.sh` from `server/linux`. Also keep th
 Every night, `swvault-backup.timer` writes to your backup folder:
 
 - `daily/gitea-*.tar.gz`: Gitea's database, config and repositories. 14 are kept.
-- `daily/server-config-*.tar.gz`: `.env` (Gitea secrets and email settings), the Tailscale identity (so a restored server keeps its address), the admin token, `team.json`, and the team service's invites, profiles and review-email log.
+- `daily/server-config-*.tar.gz`: `.env` (Gitea secrets and email settings), the Tailscale identity (so a restored server keeps its address), the admin token, `team.json`, and the team service's invites, profiles, cars/subsystems/REs and review-email log.
 - `lfs/`: every file version. It's append-only, so each night copies only what's new.
 
 Copy the backup folder to a second place now and then (another disk, cloud storage).

@@ -15,11 +15,14 @@ internal sealed class RpcDispatcher
     private readonly TeamConfig? _team;
     private readonly Func<string, string, Task<VaultSession>>? _joinTeam;
     private readonly Action<string>? _showWindow;
+    private readonly Func<string, Task<SubsystemInfo?>>? _subsystemFor;
 
     public RpcDispatcher(VaultManager vaults, JobManager jobs, FileLog log, Action? onVaultsChanged = null,
-        TeamConfig? team = null, Func<string, string, Task<VaultSession>>? joinTeam = null, Action<string>? showWindow = null)
+        TeamConfig? team = null, Func<string, string, Task<VaultSession>>? joinTeam = null, Action<string>? showWindow = null,
+        Func<string, Task<SubsystemInfo?>>? subsystemFor = null)
     {
         _showWindow = showWindow;
+        _subsystemFor = subsystemFor;
         _vaults = vaults;
         _jobs = jobs;
         _log = log;
@@ -105,7 +108,7 @@ internal sealed class RpcDispatcher
             case Methods.UiShow:
             {
                 var show = Payload<UiShowRequest>(payload);
-                if (show.What is not ("signIn" or "invite" or "profile" or "reviews" or "requestReview"))
+                if (show.What is not ("signIn" or "invite" or "profile" or "reviews" or "requestReview" or "subsystems" or "approvals"))
                     throw VaultException.BadRequest($"Unknown window '{show.What}'.");
                 if (show.What == "requestReview" && string.IsNullOrEmpty(show.Path)) throw VaultException.BadRequest("Which file?");
                 _showWindow?.Invoke(show.What == "requestReview" ? "requestReview|" + show.Path : show.What);
@@ -114,6 +117,12 @@ internal sealed class RpcDispatcher
 
             case Methods.TeamGet:
                 return _team == null ? null : new TeamInfo { Name = _team.Name, VaultUrl = _team.VaultUrl, LocalRoot = _team.LocalRoot };
+
+            case Methods.SubsystemFor:
+            {
+                var path = Payload<PathsRequest>(payload).Paths?.FirstOrDefault();
+                return string.IsNullOrEmpty(path) || _subsystemFor == null ? null : await _subsystemFor(path).ConfigureAwait(false);
+            }
 
             case Methods.VaultSync:
             {

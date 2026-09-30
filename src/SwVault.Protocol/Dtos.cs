@@ -112,6 +112,17 @@ namespace SwVault.Protocol
         [DataMember(Name = "path", EmitDefaultValue = false)] public string Path { get; set; }
     }
 
+    /// <summary>A car subsystem (a vault folder) and its responsible engineers.</summary>
+    [DataContract]
+    public sealed class SubsystemInfo
+    {
+        [DataMember(Name = "car")] public string Car { get; set; }
+        [DataMember(Name = "name")] public string Name { get; set; }
+        [DataMember(Name = "folder")] public string Folder { get; set; }
+        [DataMember(Name = "engineers")] public string[] Engineers { get; set; }
+        [DataMember(Name = "pendingEngineers", EmitDefaultValue = false)] public string[] PendingEngineers { get; set; }
+    }
+
     /// <summary>The team vault this install was packaged for (team.json), if any.</summary>
     [DataContract]
     public sealed class TeamInfo

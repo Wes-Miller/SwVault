@@ -33,7 +33,8 @@ internal sealed class ProfileForm : Form
             MaximumSize = new Size(440, 0),
             Margin = new Padding(0, 0, 0, 10),
             Text = (firstTime ? "One more thing: " : "") +
-                   "are you a general member or a subteam lead? Leads are who teammates send design, simulation and drawing review requests to.",
+                   "are you a general member or a subteam lead? Leads are who teammates send design, simulation and drawing review requests to. " +
+                   "An admin approves new leads. (Responsible engineers of subsystems are set in tray icon > Subsystems.)",
         });
         layout.Controls.Add(_role);
         var buttons = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.RightToLeft, Width = 440, Margin = new Padding(0, 12, 0, 0) };
@@ -56,9 +57,11 @@ internal sealed class ProfileForm : Form
         {
             var (directory, me) = await Task.Run(() => _agent.TeamDirectoryAsync());
             _role.SetSuggestions(directory.Subteams);
-            var mine = directory.People.FirstOrDefault(p => string.Equals(p.Login, me, StringComparison.OrdinalIgnoreCase))?.Profile;
-            if (mine != null) _role.Profile = mine;
-            _status.Text = "";
+            var person = directory.People.FirstOrDefault(p => string.Equals(p.Login, me, StringComparison.OrdinalIgnoreCase));
+            if (person?.Profile != null) _role.Profile = person.Profile;
+            _status.Text = person?.PendingLead != null
+                ? $"You asked to be the {person.PendingLead} lead; an admin still has to approve it."
+                : "Becoming a lead needs an admin's approval.";
             _save.Enabled = true;
         }
         catch (VaultException ex)
@@ -78,7 +81,10 @@ internal sealed class ProfileForm : Form
         try
         {
             var profile = _role.Profile;
-            await Task.Run(() => _agent.SaveMyProfileAsync(profile));
+            var pending = await Task.Run(() => _agent.SaveMyProfileAsync(profile));
+            if (pending != null)
+                MessageBox.Show(this, $"Your request to be the {pending} lead was sent to the vault admins. SwVault tells you when it's approved; until then you're listed as before.",
+                    "SwVault", MessageBoxButtons.OK, MessageBoxIcon.Information);
             DialogResult = DialogResult.OK;
             Close();
         }

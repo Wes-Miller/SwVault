@@ -15,7 +15,8 @@ public sealed record TeamProfile(bool IsLead, string? Subteam)
     public override string ToString() => IsLead ? $"{Subteam} lead" : "General member";
 }
 
-public sealed record TeamPerson(string Login, string? FullName, TeamProfile? Profile)
+/// <param name="PendingLead">Subteam they asked to lead, while waiting for an admin to approve.</param>
+public sealed record TeamPerson(string Login, string? FullName, TeamProfile? Profile, string? PendingLead = null)
 {
     public string DisplayName => string.IsNullOrWhiteSpace(FullName) ? Login : FullName!;
 }
@@ -104,14 +105,18 @@ public static partial class TeamInvites
                 "lead" => new TeamProfile(true, HostAdapters.GetString(p, "subteam")),
                 "member" => new TeamProfile(false, null),
                 _ => null,
-            })).ToList();
+            },
+            HostAdapters.GetString(p, "pendingLead"))).ToList();
         return new TeamDirectory(people, Strings(root, "subteams"));
     }
 
-    public static async Task SaveMyProfileAsync(string vaultUrl, Credential me, TeamProfile profile, CancellationToken ct = default)
+    /// <summary>Saves my role. Returns the subteam when becoming its lead now waits for an admin, else null.</summary>
+    public static async Task<string?> SaveMyProfileAsync(string vaultUrl, Credential me, TeamProfile profile, CancellationToken ct = default)
     {
-        using var _ = await SendAsync(HttpMethod.Put, vaultUrl, "people/me", me,
+        using var doc = await SendAsync(HttpMethod.Put, vaultUrl, "people/me", me,
             new { memberType = profile.IsLead ? "lead" : "member", subteam = profile.Subteam }, ct).ConfigureAwait(false);
+        var pending = HostAdapters.GetString(doc.RootElement, "pendingLead");
+        return string.IsNullOrEmpty(pending) ? null : pending;
     }
 
     /// <summary>Asks the server to email whoever a review event concerns (lead or requester). Once per event.</summary>

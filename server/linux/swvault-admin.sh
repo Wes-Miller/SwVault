@@ -4,7 +4,7 @@
 #   sudo ./swvault-admin.sh invite --uses 20 --days 14    # one invite link for the whole team
 #   sudo ./swvault-admin.sh invite --viewer               # single-use, read-only
 #   sudo ./swvault-admin.sh invites | revoke-invite <code>
-#   sudo ./swvault-admin.sh publish-installer SwVault-FSAE-0.2.0.zip
+#   sudo ./swvault-admin.sh publish-installer SwVault-FSAE-0.2.0.zip [--required] [--notes "what's new"]
 #   sudo ./swvault-admin.sh add-user alice --email alice@colorado.edu   # designer (check out / check in)
 #   sudo ./swvault-admin.sh add-user bob --viewer         # read-only
 #   sudo ./swvault-admin.sh add-user carol --approver     # designer who can release files
@@ -14,6 +14,10 @@
 #   sudo ./swvault-admin.sh list-users
 #   sudo ./swvault-admin.sh set-role alice admin|approver [--remove]
 #   sudo ./swvault-admin.sh set-lead alice Chassis | set-lead alice --member
+#   sudo ./swvault-admin.sh approvals                     # lead / responsible-engineer requests waiting
+#   sudo ./swvault-admin.sh approve alice lead | approve alice "Front Suspension"
+#   sudo ./swvault-admin.sh decline alice lead | decline alice "Front Suspension"
+#   sudo ./swvault-admin.sh cars                          # cars, subsystems and responsible engineers
 #   sudo ./swvault-admin.sh test-email you@colorado.edu
 #   sudo ./swvault-admin.sh status                        # is everything up and reachable?
 #   sudo ./swvault-admin.sh backup                        # run the nightly backup now
@@ -23,7 +27,25 @@
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
-usage() { sed -n '2,23p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+usage() { sed -n '2,27p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+
+# approve|decline <user> lead|<subsystem name or id>
+cmd_decide() {
+    local verdict="$1" user="${2:-}" what="${*:3}" body subsystem
+    [[ -n "$user" && -n "$what" ]] || die "Usage: $verdict <user> lead   or   $verdict <user> <subsystem>"
+    local approve=false
+    [[ "$verdict" == approve ]] && approve=true
+    if [[ "$what" == lead ]]; then
+        body="$(jq -n --arg l "$user" --argjson a "$approve" '{kind: "lead", login: $l, approve: $a}')"
+    else
+        subsystem="$(invites_api GET cars | jq -r --arg w "$what" \
+            '[.cars[].subsystems[] | select(.id == $w or (.name | ascii_downcase) == ($w | ascii_downcase))] | if length == 1 then .[0].id elif length > 1 then "many" else "" end')"
+        [[ "$subsystem" == many ]] && die "Several subsystems are called '$what'; use its id (see: cars)."
+        [[ -n "$subsystem" ]] || die "No subsystem called '$what' (see: cars)."
+        body="$(jq -n --arg l "$user" --arg s "$subsystem" --argjson a "$approve" '{kind: "engineer", login: $l, subsystem: $s, approve: $a}')"
+    fi
+    invites_api POST approvals "$body" | jq -r '"\(.login): \(.kind) request " + (if .approved then "approved" else "declined" end)'
+}
 
 require_setup() {
     [[ -f "$ENV_FILE" ]] || die "Not set up yet. Run: sudo ./setup.sh"
@@ -150,7 +172,7 @@ cmd_list_users() {
             grep -qxF "$login" <<<"$owners" && access+=(admin)
             grep -qxF "$login" <<<"$designers" && access+=(designer)
             grep -qxF "$login" <<<"$viewers" && access+=(viewer)
-            role="$(jq -r --arg l "$login" '.people[] | select(.login == $l) | if .memberType == "lead" then "lead: \(.subteam)" elif .memberType == "member" then "member" else "-" end' <<<"$people")"
+            role="$(jq -r --arg l "$login" '.people[] | select(.login == $l) | (if .memberType == "lead" then "lead: \(.subteam)" elif .memberType == "member" then "member" else "-" end) + (if .pendingLead then " (wants lead: \(.pendingLead))" else "" end)' <<<"$people")"
             printf '%-18s %-22s %-9s %-16s %s\n' "$login" "${name:0:22}" "$status" "$(IFS=,; echo "${access[*]:-none}")" "${role:--}"
         done
 }
@@ -286,15 +308,40 @@ case "$cmd" in
         [[ $# -ge 2 ]] || die "Usage: set-lead <user> <subteam>   or   set-lead <user> --member"
         if [[ "$2" == --member ]]; then body='{"memberType": "member"}'; else body="$(jq -n --arg s "${*:2}" '{memberType: "lead", subteam: $s}')"; fi
         invites_api PUT "people/$1" "$body" | jq -r '"\(.login) is now " + (if .memberType == "lead" then "lead of \(.subteam)" else "a general member" end)' ;;
+    approvals)
+        require_setup
+        invites_api GET approvals | jq -r '
+            (if (.leads | length) + (.engineers | length) == 0 then "Nothing waiting." else empty end),
+            (.leads[] | "\(.login)\t(\(.fullName))\twants to be the \(.subteam) lead\t-> approve \(.login) lead"),
+            (.engineers[] | "\(.login)\t(\(.fullName))\twants to be responsible engineer of \(.car) / \(.subsystem)\t-> approve \(.login) \"\(.subsystem)\"")' ;;
+    approve|decline) require_setup; cmd_decide "$cmd" "$@" ;;
+    cars)
+        require_setup
+        invites_api GET cars | jq -r '
+            if (.cars | length) == 0 then "No cars yet. Members add them in SwVault (tray icon > Subsystems)." else
+            .cars[] | "\(.name)  [\(.folder)]", (.subsystems[] | "    \(.name)  [\(.folder)]  id \(.id)  RE: " +
+                ([.engineers[] | .login + (if .status == "pending" then " (pending)" else "" end)] | if length == 0 then "-" else join(", ") end)) end' ;;
     test-email)
         require_setup
         invites_api POST test-email "$(jq -n --arg t "${1:?Usage: test-email <address>}" '{to: $t}')" >/dev/null
         say "Sent. Check $1 (and its junk folder)." ;;
     publish-installer)
         require_setup
-        [[ -f "${1:-}" ]] || die "Usage: publish-installer <SwVault-...zip>"
-        invites_api PUT installer "@$1" >/dev/null
-        say "Published. Download link: https://$(env_get VAULT_HOSTNAME)/swvault-invites/download" ;;
+        zip="${1:-}"; shift || true
+        [[ -f "$zip" ]] || die "Usage: publish-installer <SwVault-...zip> [--required] [--notes \"what's new\"]"
+        query=()
+        while (($#)); do
+            case "$1" in
+                --required) query+=("required=1") ;;
+                --notes) shift; query+=("notes=$(jq -rn --arg n "${1:-}" '$n|@uri')") ;;
+                *) die "Unknown option $1" ;;
+            esac
+            shift
+        done
+        path="installer"; ((${#query[@]})) && path+="?$(IFS='&'; echo "${query[*]}")"
+        version="$(invites_api PUT "$path" "@$zip" | jq -r .version)"
+        say "Published SwVault $version. Download link: https://$(env_get VAULT_HOSTNAME)/swvault-invites/download"
+        echo "  Everyone's SwVault offers the update within a few hours (tray icon > Install update)." ;;
     watchdog) require_setup; cmd_watchdog ;;
     add-user) require_setup; cmd_add_user "$@" ;;
     reset-password) require_setup; cmd_reset_password "$@" ;;

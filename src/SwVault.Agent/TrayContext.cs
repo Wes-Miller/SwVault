@@ -25,7 +25,17 @@ internal sealed class TrayContext : ApplicationContext
         };
         _icon.ContextMenuStrip.Opening += (_, _) => BuildMenu();
         _icon.DoubleClick += (_, _) => ShowVaults();
-        _agent.Toast += (title, message) => _ui.BeginInvoke(() => _icon.ShowBalloonTip(8000, title, message, ToolTipIcon.Info));
+        _agent.Toast += (title, message) => _ui.BeginInvoke(() =>
+        {
+            _updateBalloon = title.EndsWith(" is available", StringComparison.Ordinal) || title.EndsWith(" is required", StringComparison.Ordinal);
+            _icon.ShowBalloonTip(8000, title, message, ToolTipIcon.Info);
+        });
+        _icon.BalloonTipClicked += (_, _) => { if (_updateBalloon) InstallUpdate(); };
+        _agent.Updates.Changed += () => _ui.BeginInvoke(() =>
+        {
+            var text = _agent.Updates.Status is { } status ? "SwVault - " + status : "SwVault";
+            _icon.Text = text.Length > 63 ? text[..63] : text;
+        });
         BuildMenu();
 
         // The add-in asks for these windows instead of having its own copies.
@@ -35,6 +45,8 @@ internal sealed class TrayContext : ApplicationContext
             else if (what == "invite") ShowInvite();
             else if (what == "profile") ShowProfile();
             else if (what == "reviews") ShowReviews();
+            else if (what == "subsystems") ShowSubsystems();
+            else if (what == "approvals") ShowApprovals();
             else if (what.StartsWith("requestReview|", StringComparison.Ordinal)) ShowRequestReview(what["requestReview|".Length..]);
             else ShowVaults();
         });
@@ -44,6 +56,7 @@ internal sealed class TrayContext : ApplicationContext
     }
 
     private Form? _signIn;
+    private bool _updateBalloon;
     private Form? _invite;
 
     private void ShowSignIn()
@@ -95,6 +108,33 @@ internal sealed class TrayContext : ApplicationContext
         var form = _reviews = new ReviewsForm(_agent);
         form.FormClosed += (_, _) => { _reviews = null; form.Dispose(); };
         form.Show(); // modeless: keep it open next to SOLIDWORKS
+    }
+
+    private Form? _subsystems;
+    private Form? _approvals;
+
+    private void ShowSubsystems()
+    {
+        if (_subsystems != null)
+        {
+            _subsystems.Activate();
+            return;
+        }
+        var form = _subsystems = new SubsystemsForm(_agent);
+        form.FormClosed += (_, _) => { _subsystems = null; form.Dispose(); };
+        form.Show();
+    }
+
+    private void ShowApprovals()
+    {
+        if (_approvals != null)
+        {
+            _approvals.Activate();
+            return;
+        }
+        var form = _approvals = new ApprovalsForm(_agent);
+        form.FormClosed += (_, _) => { _approvals = null; form.Dispose(); };
+        form.Show();
     }
 
     private void ShowRequestReview(string path)
@@ -167,7 +207,24 @@ internal sealed class TrayContext : ApplicationContext
             var waiting = _agent.ReviewWatcher.WaitingForMe;
             menu.Items.Add(waiting > 0 ? $"Reviews ({waiting} waiting for you)..." : "Reviews...", null, (_, _) => ShowReviews());
             menu.Items.Add("My team role...", null, (_, _) => ShowProfile());
+            menu.Items.Add("Subsystems...", null, (_, _) => ShowSubsystems());
+            if (_agent.TeamWatcher.IsAdmin)
+            {
+                var pending = _agent.TeamWatcher.PendingApprovals;
+                menu.Items.Add(pending > 0 ? $"Approvals ({pending} waiting)..." : "Approvals...", null, (_, _) => ShowApprovals());
+            }
             menu.Items.Add("Invite people...", null, (_, _) => ShowInvite());
+        }
+        if (_agent.Updates.Status is { } updateStatus)
+        {
+            menu.Items.Add(updateStatus).Enabled = false;
+        }
+        else if (_agent.Updates.Available is { } release)
+        {
+            var update = new ToolStripMenuItem($"Install update {release.Version}{(release.Required ? " (required)" : "")}...");
+            update.Font = new Font(update.Font, FontStyle.Bold);
+            update.Click += (_, _) => InstallUpdate();
+            menu.Items.Add(update);
         }
         menu.Items.Add("Sync now", null, (_, _) => _agent.Sync.Poke());
         menu.Items.Add("Vaults...", null, (_, _) => ShowVaults());
@@ -175,8 +232,33 @@ internal sealed class TrayContext : ApplicationContext
         startup.CheckedChanged += (_, _) => SetStartAtSignIn(startup.Checked);
         menu.Items.Add(startup);
         menu.Items.Add("Open log folder", null, (_, _) => Process.Start("explorer.exe", _agent.Log.Folder));
+        if (_agent.Updates.Enabled) menu.Items.Add("Check for updates", null, async (_, _) => await CheckForUpdatesAsync());
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("Exit", null, (_, _) => ExitThread());
+    }
+
+    private async Task CheckForUpdatesAsync()
+    {
+        var result = await _agent.Updates.CheckAsync(userAsked: true);
+        if (_agent.Updates.Available == null)
+        {
+            MessageBox.Show(result, "SwVault", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+        InstallUpdate();
+    }
+
+    private void InstallUpdate()
+    {
+        var release = _agent.Updates.Available;
+        if (release == null || _agent.Updates.Installing) return;
+        var solidworksOpen = Process.GetProcessesByName("SLDWORKS").Length > 0;
+        var text = $"Install SwVault {release.Version} now?\n\n" +
+                   (release.Notes != null ? release.Notes + "\n\n" : "") +
+                   "It downloads in the background, then asks for administrator rights once. " +
+                   (solidworksOpen ? "SOLIDWORKS is open: the update waits until you close it." : "Keep SOLIDWORKS closed until it's done (about a minute).");
+        if (MessageBox.Show(text, "SwVault update", MessageBoxButtons.OKCancel, MessageBoxIcon.Question) == DialogResult.OK)
+            _agent.Updates.BeginInstall();
     }
 
     private void ShowVaults()

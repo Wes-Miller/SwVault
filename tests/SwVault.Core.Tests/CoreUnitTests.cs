@@ -298,4 +298,71 @@ public class ReviewParsingTests
 
     [Fact]
     public void IgnoresOtherIssues() => Assert.Null(Reviews.Parse(Issue("Just a normal issue", "open")));
+
+    [Fact]
+    public void ReadsTheCcLine()
+    {
+        var body = Body.Replace("\n\n> check", "\n\ncc @bob @carol.k (responsible engineers of 2027 Car / Chassis)\n\n> check");
+        var r = Reviews.Parse(Issue(body, "open", "review"))!;
+        Assert.Equal(new[] { "bob", "carol.k" }, r.CcLogins);
+        Assert.Equal("check FOS\nat the tabs", r.Message);
+        Assert.Empty(Reviews.Parse(Issue(Body, "open", "review"))!.CcLogins);
+    }
+}
+
+public class SubsystemTests
+{
+    private static readonly IReadOnlyList<Car> Cars = TeamInvites.ParseCars(System.Text.Json.JsonDocument.Parse("""
+        {"cars":[{"id":"c-1","name":"2027 Car","folder":"FS27","subsystems":[
+          {"id":"s-1","name":"Suspension","folder":"FS27/Suspension","engineers":[
+            {"login":"bob","status":"approved"},{"login":"carol","status":"pending"}]},
+          {"id":"s-2","name":"Front Uprights","folder":"FS27/Suspension/Uprights","engineers":[{"login":"dana","status":"approved"}]},
+          {"id":"s-3","name":"Chassis","folder":"FS27/Chassis","engineers":[]}]}]}
+        """).RootElement);
+
+    [Fact]
+    public void ParsesCarsAndEngineers()
+    {
+        var suspension = Cars[0].Subsystems[0];
+        Assert.Equal("2027 Car", suspension.CarName);
+        Assert.Equal(new[] { "bob" }, suspension.ApprovedEngineers);
+        Assert.True(suspension.IsEngineer("BOB"));
+        Assert.False(suspension.IsEngineer("carol"));
+        Assert.True(suspension.HasPendingRequest("carol"));
+    }
+
+    [Theory]
+    [InlineData("FS27/Suspension/Rocker.SLDPRT", "s-1")]
+    [InlineData("fs27/suspension/uprights/FrontUpright.SLDPRT", "s-2")] // the deepest folder wins, case-insensitively
+    [InlineData("FS27/Chassis/Frame.SLDASM", "s-3")]
+    [InlineData("FS27/SuspensionOld/Rocker.SLDPRT", null)] // a folder name prefix isn't a match
+    [InlineData("FS27/Top.SLDASM", null)]
+    public void FindsTheSubsystemOfAFile(string path, string? expected) =>
+        Assert.Equal(expected, TeamInvites.SubsystemFor(Cars, path)?.Id);
+}
+
+public class UpdateTests
+{
+    private static InstallerRelease? Parse(string json) =>
+        TeamInvites.ParseRelease(System.Text.Json.JsonDocument.Parse(json).RootElement);
+
+    [Fact]
+    public void ParsesThePublishedRelease()
+    {
+        var r = Parse("""{"version":"0.3.0","sha256":"ABC123","size":94371840,"published":"2026-09-30T08:00:00+00:00","required":true,"notes":"Adds part numbering"}""")!;
+        Assert.Equal(new Version(0, 3, 0), r.Version);
+        Assert.Equal("abc123", r.Sha256);
+        Assert.True(r.Required);
+        Assert.Equal("Adds part numbering", r.Notes);
+        Assert.Null(Parse("""{"version":null,"sha256":"abc"}"""));
+        Assert.False(Parse("""{"version":"1.0.0","sha256":"abc","required":false,"notes":""}""")!.Required);
+    }
+
+    [Theory]
+    [InlineData("0.3.0", "0.2.2.0", true)]
+    [InlineData("0.2.2", "0.2.2.0", false)] // the agent's assembly version has a 4th part
+    [InlineData("0.2.10", "0.2.9.0", true)] // numeric, not text, comparison
+    [InlineData("0.2.1", "0.2.2.0", false)]
+    public void ComparesVersions(string published, string current, bool newer) =>
+        Assert.Equal(newer, Parse($$"""{"version":"{{published}}","sha256":"abc"}""")!.IsNewerThan(Version.Parse(current)));
 }

@@ -19,6 +19,8 @@ namespace SwVault.Protocol
         public const string VaultsList = "vaults.list";
         public const string VaultAdd = "vault.add";
         public const string TeamGet = "team.get";
+        /// <summary>The car subsystem (and its responsible engineers) a local file belongs to, or null.</summary>
+        public const string SubsystemFor = "team.subsystemFor";
         /// <summary>Opens one of the agent's windows ("signIn", "invite") so the add-in doesn't duplicate them.</summary>
         public const string UiShow = "ui.show";
         public const string VaultSync = "vault.sync";

@@ -14,6 +14,7 @@ internal sealed class ReviewsForm : Form
     private readonly TabControl _tabs = new() { Dock = DockStyle.Fill };
     private readonly ListView _forMe = NewList("From");
     private readonly ListView _mine = NewList("Lead");
+    private readonly ListView _cc = NewList("From");
     private readonly CheckBox _showFinished = new() { Text = "Show finished", AutoSize = true };
     private readonly Label _heading = new() { AutoSize = true, MaximumSize = new Size(700, 0), Font = new Font(SystemFonts.MessageBoxFont!, FontStyle.Bold) };
     private readonly TextBox _history = new() { Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical, Dock = DockStyle.Fill };
@@ -26,7 +27,7 @@ internal sealed class ReviewsForm : Form
     private readonly Button _web = new() { Text = "Open on the web", AutoSize = true };
     private readonly Label _status = new() { AutoSize = true, ForeColor = Color.DimGray };
     private ReviewRequest? _selected;
-    private bool _selectedIsForMe;
+    private int _selectedMode; // 0 = for me as lead, 1 = my requests, 2 = copied to me as RE
 
     public ReviewsForm(AgentHost agent, bool startOnMine = false)
     {
@@ -45,6 +46,9 @@ internal sealed class ReviewsForm : Form
         minePage.Controls.Add(_mine);
         _tabs.TabPages.Add(forMePage);
         _tabs.TabPages.Add(minePage);
+        var ccPage = new TabPage("Copied to me (RE)");
+        ccPage.Controls.Add(_cc);
+        _tabs.TabPages.Add(ccPage);
         if (startOnMine) _tabs.SelectedIndex = 1;
 
         var split = new SplitContainer { Dock = DockStyle.Fill, Orientation = Orientation.Horizontal, SplitterDistance = 220 };
@@ -77,9 +81,10 @@ internal sealed class ReviewsForm : Form
 
         refresh.Click += async (_, _) => await LoadAsync();
         _showFinished.CheckedChanged += async (_, _) => await LoadAsync();
-        _forMe.SelectedIndexChanged += async (_, _) => await SelectAsync(_forMe, forMe: true);
-        _mine.SelectedIndexChanged += async (_, _) => await SelectAsync(_mine, forMe: false);
-        _tabs.SelectedIndexChanged += async (_, _) => await SelectAsync(_tabs.SelectedIndex == 0 ? _forMe : _mine, _tabs.SelectedIndex == 0);
+        _forMe.SelectedIndexChanged += async (_, _) => await SelectAsync(_forMe, 0);
+        _mine.SelectedIndexChanged += async (_, _) => await SelectAsync(_mine, 1);
+        _cc.SelectedIndexChanged += async (_, _) => await SelectAsync(_cc, 2);
+        _tabs.SelectedIndexChanged += async (_, _) => await SelectAsync(ListFor(_tabs.SelectedIndex), _tabs.SelectedIndex);
         _open.Click += (_, _) => OpenFile();
         _web.Click += (_, _) => { if (!string.IsNullOrEmpty(_selected?.WebUrl)) Process.Start(new ProcessStartInfo(_selected.WebUrl) { UseShellExecute = true }); };
         _approve.Click += async (_, _) => await RespondAsync(ReviewDecision.Approve);
@@ -89,7 +94,7 @@ internal sealed class ReviewsForm : Form
         _agent.ReviewWatcher.Changed += OnWatcherChanged;
         FormClosed += (_, _) => _agent.ReviewWatcher.Changed -= OnWatcherChanged;
         Shown += async (_, _) => await LoadAsync();
-        ShowDetail(null, false, Array.Empty<ReviewComment>());
+        ShowDetail(null, 1, Array.Empty<ReviewComment>());
     }
 
     private static ListView NewList(string personColumn)
@@ -118,6 +123,8 @@ internal sealed class ReviewsForm : Form
             var forMe = await Task.Run(() => _agent.ListReviewsAsync(forMe: true, includeClosed: finished));
             var mine = await Task.Run(() => _agent.ListReviewsAsync(forMe: false, includeClosed: true));
             Fill(_forMe, forMe, r => r.Requester);
+            var cc = await Task.Run(() => _agent.ListCcReviewsAsync(finished));
+            Fill(_cc, cc, r => r.Requester);
             Fill(_mine, finished ? mine : mine.Where(r => r.Status is ReviewStatus.Waiting or ReviewStatus.ChangesRequested || r.Updated > DateTimeOffset.Now.AddDays(-14)).ToList(), r => r.Lead);
             var waiting = forMe.Count(r => r.Status == ReviewStatus.Waiting);
             _tabs.TabPages[0].Text = waiting > 0 ? $"For me (as a lead) - {waiting} waiting" : "For me (as a lead)";
@@ -146,19 +153,21 @@ internal sealed class ReviewsForm : Form
         list.EndUpdate();
     }
 
-    private async Task SelectAsync(ListView list, bool forMe)
+    private ListView ListFor(int mode) => mode switch { 0 => _forMe, 1 => _mine, _ => _cc };
+
+    private async Task SelectAsync(ListView list, int mode)
     {
         var review = list.SelectedItems.Count > 0 ? (ReviewRequest)list.SelectedItems[0].Tag! : null;
         if (review == null)
         {
-            ShowDetail(null, forMe, Array.Empty<ReviewComment>());
+            ShowDetail(null, mode, Array.Empty<ReviewComment>());
             return;
         }
-        ShowDetail(review, forMe, Array.Empty<ReviewComment>());
+        ShowDetail(review, mode, Array.Empty<ReviewComment>());
         try
         {
             var comments = await Task.Run(() => _agent.ReviewCommentsAsync(review));
-            if (_selected?.Number == review.Number) ShowDetail(review, forMe, comments);
+            if (_selected?.Number == review.Number) ShowDetail(review, mode, comments);
         }
         catch (VaultException ex)
         {
@@ -166,13 +175,13 @@ internal sealed class ReviewsForm : Form
         }
     }
 
-    private void ShowDetail(ReviewRequest? review, bool forMe, IReadOnlyList<ReviewComment> comments)
+    private void ShowDetail(ReviewRequest? review, int mode, IReadOnlyList<ReviewComment> comments)
     {
         _selected = review;
-        _selectedIsForMe = forMe;
+        _selectedMode = mode;
         var open = review != null && review.Status is ReviewStatus.Waiting or ReviewStatus.ChangesRequested;
-        _approve.Visible = _changes.Visible = forMe;
-        _cancelRequest.Visible = !forMe;
+        _approve.Visible = _changes.Visible = mode == 0;
+        _cancelRequest.Visible = mode == 1;
         _approve.Enabled = _changes.Enabled = _cancelRequest.Enabled = open;
         _open.Enabled = _web.Enabled = _send.Enabled = _comment.Enabled = review != null;
         if (review == null)
@@ -182,7 +191,8 @@ internal sealed class ReviewsForm : Form
             return;
         }
         _heading.Text = $"{review.KindText} of {review.Path} (version {review.Version})\r\n" +
-                        $"Requested by {review.Requester} from {review.Lead} on {review.Created.ToLocalTime():MMM d} - {review.StatusText}";
+                        $"Requested by {review.Requester} from {review.Lead} on {review.Created.ToLocalTime():MMM d} - {review.StatusText}" +
+                        (review.CcLogins.Count == 0 ? "" : $"\r\nCopied to {string.Join(", ", review.CcLogins)} (responsible engineers)");
         var lines = new List<string>();
         if (!string.IsNullOrWhiteSpace(review.Message)) lines.Add($"{review.Requester}: {review.Message}");
         lines.AddRange(comments.Select(c => $"{c.Author} ({c.At.ToLocalTime():MMM d, h:mm tt}): {c.Text}"));
@@ -228,7 +238,7 @@ internal sealed class ReviewsForm : Form
                 _ => "Comment sent.",
             };
             await LoadAsync();
-            await SelectAsync(_selectedIsForMe ? _forMe : _mine, _selectedIsForMe);
+            await SelectAsync(ListFor(_selectedMode), _selectedMode);
         }
         catch (VaultException ex)
         {

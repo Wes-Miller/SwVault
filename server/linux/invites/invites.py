@@ -13,23 +13,41 @@ Joining (public)
                             adds it to the invite's team (Designers or Viewers), saves the profile
   GET  /download[?invite=C] the team's SwVault installer zip (named with the invite code, which the
                             installer picks up so the member doesn't have to type it)
+  GET  /installer/latest    {version, sha256, size, published, required, notes} of that zip; every
+                            SwVault agent checks this and offers the update to its user
 
 Members (HTTP Basic: Gitea user name + SwVault token or password; must be in the organization)
-  GET  /people              everyone on the team with their profile (member or lead, subteam)
-  PUT  /people/me           {memberType: member|lead, subteam?}
+  GET  /people              everyone on the team with their profile (member or lead, subteam,
+                            and a lead request still waiting for an admin)
+  PUT  /people/me           {memberType: member|lead, subteam?}; becoming a lead waits for an admin
+
+  GET  /cars                cars, their subsystems (each a vault folder) and responsible engineers
+  POST /cars                {name, folder?} -> new car
+  POST /cars/<id>/subsystems            {name, folder?} -> new subsystem of that car
+  POST /subsystems/<id>/engineers/me    ask to be a responsible engineer (waits for an admin)
+  DELETE /subsystems/<id>/engineers/<login>   step down / withdraw a request (admins: remove anyone)
 
   POST /reviews/<n>/notify  emails the lead (new request) or the requester (approved / changes
-                            requested, with the lead's feedback); each event is emailed once
+                            requested, with the lead's feedback); a general member's new request is
+                            also cc'd to the responsible engineers of the file's subsystem; each
+                            event is emailed once
 
 Admins (as members, and in the organization's Owners team)
   POST   /invites           {role: designer|viewer, uses, days, note?} -> new invite
   GET    /invites           active invites
   DELETE /invites/<code>    revoke
-  PUT    /installer         upload the installer zip (scripts/package.ps1 -Publish)
-  PUT    /people/<login>    set someone else's profile
+  PUT    /installer[?required=1&notes=...]   upload the installer zip (scripts/package.ps1 -Publish);
+                            required: agents keep reminding people until they install it
+  PUT    /people/<login>    set someone else's profile (no approval needed)
+  GET    /approvals         lead and responsible-engineer requests waiting for an admin
+  POST   /approvals         {kind: lead|engineer, login, subsystem?, approve: true|false}
   POST   /test-email        {to} -> sends a test message (swvault-admin.sh test-email)
+
+Admins' own lead and engineer requests are approved immediately. Admins are emailed when a
+request needs them; the requester is emailed the decision.
 """
 
+import hashlib
 import hmac
 import json
 import os
@@ -43,6 +61,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+import zipfile
 from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
 from http import HTTPStatus
@@ -57,7 +76,9 @@ STATE_DIR = os.environ.get("STATE_DIR", "/data")
 INVITES_FILE = os.path.join(STATE_DIR, "invites.json")
 PEOPLE_FILE = os.path.join(STATE_DIR, "people.json")
 NOTIFIED_FILE = os.path.join(STATE_DIR, "review-emails.json")
+SUBSYSTEMS_FILE = os.path.join(STATE_DIR, "subsystems.json")
 INSTALLER_FILE = os.path.join(STATE_DIR, "installer", "SwVault-installer.zip")
+INSTALLER_META = os.path.join(STATE_DIR, "installer", "installer.json")
 PORT = int(os.environ.get("PORT", "3100"))
 PREFIX = "/swvault-invites"
 
@@ -169,14 +190,30 @@ def clean_profile(body):
 
 def known_subteams(people):
     names = {p["subteam"] for p in people["people"].values() if p.get("subteam")}
+    names |= {p["pendingLead"]["subteam"] for p in people["people"].values() if p.get("pendingLead")}
     return sorted(names, key=str.lower)
 
 
-def save_profile(login, member_type, subteam):
+def set_profile(login, member_type, subteam, approved):
+    """
+    Saves a profile and returns it. Becoming a lead needs an admin: until one approves, the request
+    is kept as pendingLead and the person keeps their current role. Stepping down to general member
+    takes effect right away.
+    """
     with _lock:
         people = load_people()
-        people["people"][login.lower()] = {"login": login, "memberType": member_type, "subteam": subteam, "updated": stamp()}
+        key = login.lower()
+        current = people["people"].get(key) or {"memberType": "member", "subteam": ""}
+        profile = dict(current, login=login, updated=stamp())
+        already = current.get("memberType") == "lead" and (current.get("subteam") or "").lower() == subteam.lower()
+        if member_type == "lead" and not approved and not already:
+            profile["pendingLead"] = {"subteam": subteam, "requested": stamp()}
+        else:
+            profile["memberType"], profile["subteam"] = member_type, subteam
+            profile.pop("pendingLead", None)
+        people["people"][key] = profile
         save(PEOPLE_FILE, people)
+        return profile
 
 
 # ------------------------------------------------------------------ throttling
@@ -378,10 +415,19 @@ def require_member(handler):
     return login
 
 
+def is_admin(login):
+    status, _ = gitea("GET", f"teams/{team_id('Owners')}/members/{urllib.request.quote(login)}")
+    return status in (200, 204)
+
+
+def admin_logins():
+    status, members = gitea("GET", f"teams/{team_id('Owners')}/members?limit=50")
+    return [m["login"] for m in members or []] if status == 200 else []
+
+
 def require_admin(handler):
     login = require_member(handler)
-    status, _ = gitea("GET", f"teams/{team_id('Owners')}/members/{login}")
-    if status not in (200, 204):
+    if not is_admin(login):
         raise ApiError(HTTPStatus.FORBIDDEN, f"{login} isn't a vault admin. Ask an admin to do this.")
     return login
 
@@ -441,8 +487,11 @@ def redeem(handler, body):
         invite.setdefault("usedBy", []).append({"user": username, "email": email or None, "at": stamp()})
         save(INVITES_FILE, state)
         _verifications.pop(email.lower(), None)
-    save_profile(username, member_type, subteam)
+    set_profile(username, member_type, subteam, approved=False)
     log(f"invite {invite['code']} redeemed by {username} ({team}, {member_type}{' ' + subteam if subteam else ''}) from {ip}")
+    if member_type == "lead":
+        tell_admins(f"{full_name or username} wants to be the {subteam} lead",
+                    f"{full_name or username} ({username}) just joined {TEAM_NAME} and says they lead {subteam}.\n")
     return HTTPStatus.CREATED, {"username": username, "team": TEAM_NAME, "role": invite["role"]}
 
 
@@ -463,16 +512,220 @@ def list_people():
         people.append({
             "login": member["login"], "fullName": member.get("full_name") or "",
             "memberType": profile.get("memberType"), "subteam": profile.get("subteam") or "",
+            "pendingLead": (profile.get("pendingLead") or {}).get("subteam"),
         })
     people.sort(key=lambda p: (p["memberType"] != "lead", (p["subteam"] or "").lower(), (p["fullName"] or p["login"]).lower()))
     return HTTPStatus.OK, {"people": people, "subteams": known_subteams({"people": profiles})}
 
 
-def update_profile(login, body):
+def update_profile(login, body, approved):
     member_type, subteam = clean_profile(body)
-    save_profile(login, member_type, subteam)
-    log(f"{login} is now {member_type}{' of ' + subteam if subteam else ''}")
-    return HTTPStatus.OK, {"login": login, "memberType": member_type, "subteam": subteam}
+    profile = set_profile(login, member_type, subteam, approved)
+    pending = (profile.get("pendingLead") or {}).get("subteam")
+    if pending:
+        log(f"{login} asked to be the {pending} lead (waiting for an admin)")
+        tell_admins(f"{display_name(login)} wants to be the {pending} lead",
+                    f"{display_name(login)} ({login}) asked to be the {pending} subteam lead.\n")
+    else:
+        log(f"{login} is now {member_type}{' of ' + subteam if subteam else ''}")
+    return HTTPStatus.OK, {"login": login, "memberType": profile.get("memberType"), "subteam": profile.get("subteam") or "",
+                           "pendingLead": pending}
+
+
+# ------------------------------------------------------------------ cars, subsystems, engineers
+
+# A car (e.g. "2027 Car") has subsystems (e.g. "Front Suspension"), each a folder in the vault.
+# Members add them; responsible engineers (several per subsystem) are approved by an admin.
+
+def load_cars():
+    return load(SUBSYSTEMS_FILE, {"cars": []})
+
+
+def clean_name(text, what):
+    name = re.sub(r"\s+", " ", (text or "")).strip()[:60]
+    if not name:
+        raise ApiError(HTTPStatus.BAD_REQUEST, f"Give the {what} a name.")
+    return name
+
+
+def clean_folder(text, default):
+    """A vault-relative folder with forward slashes, safe on Windows."""
+    raw = ((text or "").strip() or default).replace("\\", "/")
+    parts = [re.sub(r'[<>:"|?*\x00-\x1f]', "", p).strip().rstrip(".") for p in raw.split("/")]
+    parts = [p for p in parts if p and p != ".."]
+    if not parts or parts[0].lower() in (".swvault", ".swvault-local"):
+        raise ApiError(HTTPStatus.BAD_REQUEST, "Pick a folder inside the vault.")
+    return "/".join(parts)[:200]
+
+
+def find_car(cars, car_id):
+    car = next((c for c in cars["cars"] if c["id"] == car_id), None)
+    if not car:
+        raise ApiError(HTTPStatus.NOT_FOUND, "No such car.")
+    return car
+
+
+def find_subsystem(cars, subsystem_id):
+    for car in cars["cars"]:
+        for subsystem in car["subsystems"]:
+            if subsystem["id"] == subsystem_id:
+                return car, subsystem
+    raise ApiError(HTTPStatus.NOT_FOUND, "No such subsystem.")
+
+
+def subsystem_for(path):
+    """The (car, subsystem) whose folder holds this vault path; the deepest folder wins."""
+    best = None
+    lower = path.lower()
+    for car in load_cars()["cars"]:
+        for subsystem in car["subsystems"]:
+            folder = subsystem["folder"].lower().rstrip("/") + "/"
+            if lower.startswith(folder) and (best is None or len(folder) > len(best[1]["folder"]) + 1):
+                best = (car, subsystem)
+    return best
+
+
+def list_cars():
+    return HTTPStatus.OK, load_cars()
+
+
+def add_car(login, body):
+    name = clean_name(body.get("name"), "car")
+    folder = clean_folder(body.get("folder"), name)
+    with _lock:
+        cars = load_cars()
+        if any(c["name"].lower() == name.lower() for c in cars["cars"]):
+            raise ApiError(HTTPStatus.CONFLICT, f"There's already a car called {name}.")
+        car = {"id": "c-" + secrets.token_hex(4), "name": name, "folder": folder, "createdBy": login, "created": stamp(), "subsystems": []}
+        cars["cars"].append(car)
+        save(SUBSYSTEMS_FILE, cars)
+    log(f"{login} added car {name} ({folder})")
+    return HTTPStatus.CREATED, car
+
+
+def add_subsystem(login, car_id, body):
+    name = clean_name(body.get("name"), "subsystem")
+    with _lock:
+        cars = load_cars()
+        car = find_car(cars, car_id)
+        folder = clean_folder(body.get("folder"), car["folder"] + "/" + name)
+        if any(s["name"].lower() == name.lower() for s in car["subsystems"]):
+            raise ApiError(HTTPStatus.CONFLICT, f"{car['name']} already has a {name} subsystem.")
+        taken = next((s for c in cars["cars"] for s in c["subsystems"] if s["folder"].lower() == folder.lower()), None)
+        if taken:
+            raise ApiError(HTTPStatus.CONFLICT, f"The folder {folder} already belongs to the {taken['name']} subsystem.")
+        subsystem = {"id": "s-" + secrets.token_hex(4), "name": name, "folder": folder, "createdBy": login, "created": stamp(), "engineers": []}
+        car["subsystems"].append(subsystem)
+        save(SUBSYSTEMS_FILE, cars)
+    log(f"{login} added subsystem {name} to {car['name']} ({folder})")
+    return HTTPStatus.CREATED, subsystem
+
+
+def claim_engineer(login, subsystem_id):
+    """Ask to be a responsible engineer. Admins are approved at once; everyone else waits."""
+    approved = is_admin(login)
+    with _lock:
+        cars = load_cars()
+        car, subsystem = find_subsystem(cars, subsystem_id)
+        entry = next((e for e in subsystem["engineers"] if e["login"].lower() == login.lower()), None)
+        if entry and entry["status"] == "approved":
+            return HTTPStatus.OK, subsystem
+        if entry is None:
+            entry = {"login": login}
+            subsystem["engineers"].append(entry)
+        entry.update(status="approved" if approved else "pending", requested=stamp())
+        if approved:
+            entry.update(decidedBy=login, decided=stamp())
+        save(SUBSYSTEMS_FILE, cars)
+    log(f"{login} {'is now' if approved else 'asked to be'} responsible engineer of {car['name']} / {subsystem['name']}")
+    if not approved:
+        tell_admins(f"{display_name(login)} wants to be responsible engineer of {subsystem['name']}",
+                    f"{display_name(login)} ({login}) asked to be a responsible engineer of {car['name']} / {subsystem['name']} "
+                    f"(folder {subsystem['folder']}).\n")
+    return HTTPStatus.OK, subsystem
+
+
+def remove_engineer(caller, subsystem_id, login):
+    if caller.lower() != login.lower() and not is_admin(caller):
+        raise ApiError(HTTPStatus.FORBIDDEN, "Only admins can remove someone else as responsible engineer.")
+    with _lock:
+        cars = load_cars()
+        car, subsystem = find_subsystem(cars, subsystem_id)
+        before = len(subsystem["engineers"])
+        subsystem["engineers"] = [e for e in subsystem["engineers"] if e["login"].lower() != login.lower()]
+        if len(subsystem["engineers"]) == before:
+            raise ApiError(HTTPStatus.NOT_FOUND, f"{login} isn't a responsible engineer of {subsystem['name']}.")
+        save(SUBSYSTEMS_FILE, cars)
+    log(f"{caller} removed {login} as responsible engineer of {car['name']} / {subsystem['name']}")
+    return HTTPStatus.OK, subsystem
+
+
+def pending_approvals():
+    people = load_people()["people"].values()
+    leads = [{"login": p["login"], "fullName": display_name(p["login"]), "subteam": p["pendingLead"]["subteam"],
+              "requested": p["pendingLead"].get("requested")} for p in people if p.get("pendingLead")]
+    engineers = [{"login": e["login"], "fullName": display_name(e["login"]), "carId": car["id"], "car": car["name"],
+                  "subsystemId": s["id"], "subsystem": s["name"], "folder": s["folder"], "requested": e.get("requested")}
+                 for car in load_cars()["cars"] for s in car["subsystems"] for e in s["engineers"] if e["status"] == "pending"]
+    return HTTPStatus.OK, {"leads": leads, "engineers": engineers}
+
+
+def decide(admin, body):
+    kind = (body.get("kind") or "").lower()
+    login = (body.get("login") or "").strip()
+    approve = body.get("approve") is True
+    verdict = "approved" if approve else "declined"
+    if kind == "lead":
+        with _lock:
+            people = load_people()
+            profile = people["people"].get(login.lower())
+            pending = (profile or {}).get("pendingLead")
+            if not pending:
+                raise ApiError(HTTPStatus.NOT_FOUND, f"{login} hasn't asked to be a lead.")
+            if approve:
+                profile.update(memberType="lead", subteam=pending["subteam"], approvedBy=admin, updated=stamp())
+            profile.pop("pendingLead", None)
+            save(PEOPLE_FILE, people)
+        what = f"the {pending['subteam']} lead"
+    elif kind == "engineer":
+        with _lock:
+            cars = load_cars()
+            car, subsystem = find_subsystem(cars, body.get("subsystem") or "")
+            entry = next((e for e in subsystem["engineers"] if e["login"].lower() == login.lower() and e["status"] == "pending"), None)
+            if not entry:
+                raise ApiError(HTTPStatus.NOT_FOUND, f"{login} hasn't asked to be responsible engineer of {subsystem['name']}.")
+            if approve:
+                entry.update(status="approved", decidedBy=admin, decided=stamp())
+            else:
+                subsystem["engineers"].remove(entry)
+            save(SUBSYSTEMS_FILE, cars)
+        what = f"a responsible engineer of {car['name']} / {subsystem['name']}"
+    else:
+        raise ApiError(HTTPStatus.BAD_REQUEST, "kind must be lead or engineer.")
+    log(f"{admin} {verdict} {login} as {what}")
+    email_quietly(login, f"You're now {what}" if approve else f"Request declined: {what}",
+                  f"{display_name(admin)} {verdict} your request to be {what}.\n")
+    return HTTPStatus.OK, {"login": login, "kind": kind, "approved": approve}
+
+
+def email_quietly(login, subject, text):
+    """Best effort: requests and decisions are saved whether or not email works."""
+    if not SMTP_HOST:
+        return False
+    address = user_email(login)
+    if not address:
+        return False
+    try:
+        send_email(address, f"[{TEAM_NAME}] {subject}", text)
+        return True
+    except ApiError as e:
+        log(f"email to {login} failed: {e.message}")
+        return False
+
+
+def tell_admins(subject, text):
+    for admin in admin_logins():
+        email_quietly(admin, subject, text + "\nApprove or decline it in SwVault: tray icon > Approvals.\n")
 
 
 # ------------------------------------------------------------------ review emails
@@ -545,22 +798,51 @@ def notify_review(caller, number):
         text = (f"{display_name(requester)} asked you, as a subteam lead, for a {kind} review of {path} (version {version}).\n"
                 + (f"\nTheir note:\n" + "\n".join("    " + l for l in message.splitlines()) + "\n" if message else ""))
 
-    key = f"{number}:{event}"
+    footer = f"\n{how}\n" + (f"On the web: {web}\n" if web else "")
+    result = {"sent": False}
+    if send_review_email_once(f"{number}:{event}", to_login, f"[{TEAM_NAME}] {subject}", text + footer, number, event):
+        result = {"sent": True, "to": to_login}
+
+    if event == "opened":
+        found, engineers = review_cc(requester, lead, path)
+        if found:
+            car, subsystem = found
+            cc_text = (f"{display_name(requester)} asked {display_name(lead)} for a {kind} review of {path} (version {version}).\n"
+                       f"You're cc'd as a responsible engineer of {car['name']} / {subsystem['name']}.\n")
+            result["cc"] = [e for e in engineers
+                            if send_review_email_once(f"{number}:cc:{e.lower()}", e, f"[{TEAM_NAME}] cc: {subject}", cc_text + footer, number, "cc")]
+    return HTTPStatus.OK, result
+
+
+def review_cc(requester, lead, path):
+    """
+    Responsible engineers to cc on a new review request: general members' requests about a file in
+    a subsystem go to that subsystem's approved engineers too (not to the requester or the lead).
+    """
+    if load_people()["people"].get(requester.lower(), {}).get("memberType") == "lead":
+        return None, []
+    found = subsystem_for(path)
+    if not found:
+        return None, []
+    skip = {requester.lower(), lead.lower()}
+    return found, [e["login"] for e in found[1]["engineers"] if e["status"] == "approved" and e["login"].lower() not in skip]
+
+
+def send_review_email_once(key, to_login, subject, text, number, event):
     with _lock:
-        notified = load(NOTIFIED_FILE, {"sent": []})
-        if key in notified["sent"]:
-            return HTTPStatus.OK, {"sent": False, "reason": "already sent"}
+        if key in load(NOTIFIED_FILE, {"sent": []})["sent"]:
+            return False
     address = user_email(to_login) if to_login else None
     if not address:
         log(f"review #{number} {event}: {to_login or 'nobody'} has no email address; not emailed")
-        return HTTPStatus.OK, {"sent": False, "reason": "no email address"}
-    send_email(address, f"[{TEAM_NAME}] {subject}", text + f"\n{how}\n" + (f"On the web: {web}\n" if web else ""))
+        return False
+    send_email(address, subject, text)
     with _lock:
         notified = load(NOTIFIED_FILE, {"sent": []})
         notified["sent"] = (notified["sent"] + [key])[-5000:]
         save(NOTIFIED_FILE, notified)
     log(f"review #{number} {event}: emailed {to_login}")
-    return HTTPStatus.OK, {"sent": True, "to": to_login}
+    return True
 
 
 def create_invite(admin, body):
@@ -585,6 +867,27 @@ def create_invite(admin, body):
         save(INVITES_FILE, state)
     log(f"invite {invite['code']} created by {admin}: {role}, {uses} use(s), {days} day(s)")
     return HTTPStatus.CREATED, public_invite(invite)
+
+
+def package_version(path):
+    """The SwVault version inside an installer zip (its swvault-package.json), or None."""
+    try:
+        with zipfile.ZipFile(path) as z:
+            names = {n.replace("\\", "/"): n for n in z.namelist()}
+            if "swvault-package.json" in names:
+                version = json.loads(z.read(names["swvault-package.json"]).decode("utf-8-sig")).get("version")
+                return str(version) if version and re.fullmatch(r"\d+(\.\d+){1,3}", str(version)) else None
+            # Packages from before swvault-package.json: still a SwVault installer, version unknown.
+            return "0.0.0" if any(n.endswith("install.ps1") for n in names) else None
+    except (zipfile.BadZipFile, ValueError, OSError):
+        return None
+
+
+def latest_installer():
+    if not os.path.exists(INSTALLER_FILE):
+        raise ApiError(HTTPStatus.NOT_FOUND, "Your admin hasn't published the installer yet.")
+    meta = load(INSTALLER_META, {})
+    return HTTPStatus.OK, {k: meta.get(k) for k in ("version", "sha256", "size", "published", "required", "notes")}
 
 
 def list_invites():
@@ -679,14 +982,34 @@ class Handler(BaseHTTPRequestHandler):
                 result = redeem(self, self.read_json())
             elif method == "GET" and route == "/download":
                 return self.download()
+            elif method == "GET" and route == "/installer/latest":
+                result = latest_installer()
             elif method == "GET" and route == "/people":
                 require_member(self)
                 result = list_people()
             elif method == "PUT" and route == "/people/me":
-                result = update_profile(require_member(self), self.read_json())
+                login = require_member(self)
+                result = update_profile(login, self.read_json(), approved=is_admin(login))
             elif method == "PUT" and route.startswith("/people/"):
                 require_admin(self)  # admins can set anyone's profile (e.g. mark the subteam leads)
-                result = update_profile(route[len("/people/"):], self.read_json())
+                result = update_profile(route[len("/people/"):], self.read_json(), approved=True)
+            elif method == "GET" and route == "/cars":
+                require_member(self)
+                result = list_cars()
+            elif method == "POST" and route == "/cars":
+                result = add_car(require_member(self), self.read_json())
+            elif method == "POST" and re.fullmatch(r"/cars/[^/]+/subsystems", route):
+                result = add_subsystem(require_member(self), route.split("/")[2], self.read_json())
+            elif method == "POST" and re.fullmatch(r"/subsystems/[^/]+/engineers/me", route):
+                result = claim_engineer(require_member(self), route.split("/")[2])
+            elif method == "DELETE" and re.fullmatch(r"/subsystems/[^/]+/engineers/[^/]+", route):
+                parts = route.split("/")
+                result = remove_engineer(require_member(self), parts[2], parts[4])
+            elif method == "GET" and route == "/approvals":
+                require_admin(self)
+                result = pending_approvals()
+            elif method == "POST" and route == "/approvals":
+                result = decide(require_admin(self), self.read_json())
             elif method == "POST" and re.fullmatch(r"/reviews/\d+/notify", route):
                 result = notify_review(require_member(self), int(route.split("/")[2]))
             elif method == "POST" and route == "/invites":
@@ -733,20 +1056,32 @@ class Handler(BaseHTTPRequestHandler):
         os.makedirs(os.path.dirname(INSTALLER_FILE), exist_ok=True)
         tmp = INSTALLER_FILE + ".upload"
         remaining = length
+        digest = hashlib.sha256()
         with open(tmp, "wb") as f:
             while remaining > 0:
                 chunk = self.rfile.read(min(remaining, 1024 * 1024))
                 if not chunk:
                     raise ApiError(HTTPStatus.BAD_REQUEST, "Upload was cut off.")
                 f.write(chunk)
+                digest.update(chunk)
                 remaining -= len(chunk)
-        with open(tmp, "rb") as f:
-            if f.read(2) != b"PK":
-                os.remove(tmp)
-                raise ApiError(HTTPStatus.BAD_REQUEST, "That isn't a zip file.")
+        version = package_version(tmp)
+        if version is None:
+            os.remove(tmp)
+            raise ApiError(HTTPStatus.BAD_REQUEST, "That isn't a SwVault installer zip (build it with scripts/package.ps1).")
+        meta = {
+            "version": version,
+            "sha256": digest.hexdigest(),
+            "size": length,
+            "published": stamp(),
+            "publishedBy": admin,
+            "required": (self.query("required") or "").lower() in ("1", "true", "yes"),
+            "notes": (self.query("notes") or "").strip()[:500],
+        }
         os.replace(tmp, INSTALLER_FILE)
-        log(f"installer published by {admin} ({length} bytes)")
-        self.send_json(HTTPStatus.OK, {"size": length})
+        save(INSTALLER_META, meta)
+        log(f"installer {version} published by {admin} ({length} bytes{', required' if meta['required'] else ''})")
+        self.send_json(HTTPStatus.OK, meta)
 
     def do_GET(self):
         self.handle_request("GET")

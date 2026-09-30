@@ -37,8 +37,12 @@ public sealed record ReviewRequest(
     string Message,
     DateTimeOffset Created,
     DateTimeOffset Updated,
-    string WebUrl)
+    string WebUrl,
+    IReadOnlyList<string>? Cc = null)
 {
+    /// <summary>Responsible engineers copied on the request (a general member's request in their subsystem).</summary>
+    public IReadOnlyList<string> CcLogins => Cc ?? Array.Empty<string>();
+
     public string FileName => System.IO.Path.GetFileName(Path);
 
     public string KindText => Kind switch
@@ -97,8 +101,10 @@ public static partial class Reviews
     public static ReviewKind DefaultKindFor(string path) =>
         System.IO.Path.GetExtension(path).Equals(".slddrw", StringComparison.OrdinalIgnoreCase) ? ReviewKind.Drawing : ReviewKind.Design;
 
+    /// <param name="cc">Responsible engineers to copy (mentioned, so the server notifies them too).</param>
+    /// <param name="ccReason">Why they're copied, e.g. "responsible engineers of 2027 Car / Front Suspension".</param>
     public static async Task<ReviewRequest> RequestAsync(string vaultUrl, Credential me, ReviewKind kind, string lead,
-        string vaultPath, int version, string? message, CancellationToken ct = default)
+        string vaultPath, int version, string? message, IReadOnlyList<string>? cc = null, string? ccReason = null, CancellationToken ct = default)
     {
         var labels = await EnsureLabelsAsync(vaultUrl, me, ct).ConfigureAwait(false);
         var header = JsonSerializer.Serialize(new { kind = kind.ToString().ToLowerInvariant(), path = vaultPath, version });
@@ -108,6 +114,10 @@ public static partial class Reviews
             .Append("**").Append(kindText).Append(" review** requested by @").Append(me.UserName)
             .Append(" for `").Append(vaultPath).Append("` (version ").Append(version).AppendLine(").")
             .AppendLine();
+        if (cc is { Count: > 0 })
+            body.Append("cc ").Append(string.Join(" ", cc.Select(c => "@" + c)))
+                .AppendLine(string.IsNullOrEmpty(ccReason) ? "" : " (" + ccReason + ")")
+                .AppendLine();
         if (!string.IsNullOrWhiteSpace(message))
             foreach (var line in message.Trim().Split('\n')) body.Append("> ").AppendLine(line.TrimEnd('\r'));
         body.AppendLine().AppendLine("_Respond from SOLIDWORKS (SwVault tab > Reviews) or comment here._");
@@ -134,6 +144,23 @@ public static partial class Reviews
                 $"issues?type=issues&state={state}&labels={MarkerLabel}&{who}={Uri.EscapeDataString(me.UserName)}&limit=50&page={page}", null, ct).ConfigureAwait(false);
             var batch = doc.RootElement.EnumerateArray().Select(Parse).Where(r => r != null).Select(r => r!).ToList();
             result.AddRange(batch);
+            if (doc.RootElement.GetArrayLength() < 50) break;
+        }
+        return result.OrderByDescending(r => r.Updated).ToList();
+    }
+
+    /// <summary>Review requests I'm cc'd on as a responsible engineer, newest activity first.</summary>
+    public static async Task<IReadOnlyList<ReviewRequest>> ListCcAsync(string vaultUrl, Credential me, bool includeClosed, CancellationToken ct = default)
+    {
+        var state = includeClosed ? "all" : "open";
+        var result = new List<ReviewRequest>();
+        for (var page = 1; page <= 10; page++)
+        {
+            using var doc = await SendAsync(HttpMethod.Get, vaultUrl, me,
+                $"issues?type=issues&state={state}&labels={MarkerLabel}&mentioned_by={Uri.EscapeDataString(me.UserName)}&limit=50&page={page}", null, ct).ConfigureAwait(false);
+            result.AddRange(doc.RootElement.EnumerateArray().Select(Parse)
+                .Where(r => r != null && r.CcLogins.Contains(me.UserName, StringComparer.OrdinalIgnoreCase))
+                .Select(r => r!));
             if (doc.RootElement.GetArrayLength() < 50) break;
         }
         return result.OrderByDescending(r => r.Updated).ToList();
@@ -202,6 +229,9 @@ public static partial class Reviews
     [GeneratedRegex(@"^\s*>\s?(.*)$", RegexOptions.Multiline)]
     private static partial Regex QuotePattern();
 
+    [GeneratedRegex(@"^cc((?:\s+@[A-Za-z0-9._-]+)+)", RegexOptions.Multiline)]
+    private static partial Regex CcPattern();
+
     internal static ReviewRequest? Parse(JsonElement issue)
     {
         var body = HostAdapters.GetString(issue, "body") ?? "";
@@ -234,13 +264,18 @@ public static partial class Reviews
             ? HostAdapters.GetString(a[0], "login") ?? ""
             : "";
         var message = string.Join("\n", QuotePattern().Matches(body).Select(m => m.Groups[1].Value));
+        var ccLine = CcPattern().Match(body);
+        var cc = ccLine.Success
+            ? ccLine.Groups[1].Value.Split(new[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries).Select(s => s.TrimStart('@')).ToList()
+            : new List<string>();
         return new ReviewRequest(
             issue.GetProperty("number").GetInt32(), kind, path, version,
             issue.TryGetProperty("user", out var u) ? HostAdapters.GetString(u, "login") ?? "" : "",
             lead, status, message,
             DateTimeOffset.TryParse(HostAdapters.GetString(issue, "created_at"), out var created) ? created : DateTimeOffset.MinValue,
             DateTimeOffset.TryParse(HostAdapters.GetString(issue, "updated_at"), out var updated) ? updated : DateTimeOffset.MinValue,
-            HostAdapters.GetString(issue, "html_url") ?? "");
+            HostAdapters.GetString(issue, "html_url") ?? "",
+            cc);
     }
 
     private static async Task<JsonDocument> SendAsync(HttpMethod method, string vaultUrl, Credential me, string path, object? body, CancellationToken ct)

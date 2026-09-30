@@ -84,6 +84,7 @@ If the import is interrupted, run it again: files already imported are skipped.
 | Someone left files checked out | `swvault unlock "<path>"` (admins only), or ask them to Undo Check Out |
 | See all check-outs | `swvault locks` |
 | Onboard a member | Linux PC setup: `swvault-admin.sh add-user <name>`, send them the card and the team installer; they install and sign in. Otherwise: account + team → they install SwVault → tray icon → Vaults... → paste URL, user name, token → Get Latest in the task pane |
+| Approve a lead or responsible engineer | Tray icon → **Approvals (n waiting)...** (you're notified when a request arrives). Linux PC setup: `swvault-admin.sh approvals`, `approve <name> lead\|<subsystem>` |
 | Check a PC's setup | `swvault doctor` |
 | Logs | `%LOCALAPPDATA%\SwVault\logs` (agent and add-in) |
 

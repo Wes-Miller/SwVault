@@ -99,11 +99,14 @@ internal sealed class ReviewWatcher : IDisposable
 
         var forMe = await Reviews.ListAsync(target.Value.VaultUrl, me, assignedToMe: true, includeClosed: false, _cts.Token).ConfigureAwait(false);
         var mine = await Reviews.ListAsync(target.Value.VaultUrl, me, assignedToMe: false, includeClosed: true, _cts.Token).ConfigureAwait(false);
+        var copied = await Reviews.ListCcAsync(target.Value.VaultUrl, me, includeClosed: false, _cts.Token).ConfigureAwait(false);
         var waiting = forMe.Where(r => r.Status == ReviewStatus.Waiting).ToList();
 
         var messages = new List<string>();
         foreach (var r in waiting.Where(r => !_seen.ContainsKey(r.Number)))
             messages.Add($"{r.Requester} asked you for a {r.KindText.ToLowerInvariant()} of {r.FileName}.");
+        foreach (var r in copied.Where(r => !_seen.ContainsKey(r.Number)))
+            messages.Add($"{r.Requester} asked {r.Lead} for a {r.KindText.ToLowerInvariant()} of {r.FileName} (you're copied as RE).");
         foreach (var r in mine)
         {
             if (!_seen.TryGetValue(r.Number, out var before) || before == r.Status.ToString()) continue;
@@ -113,7 +116,7 @@ internal sealed class ReviewWatcher : IDisposable
 
         var changed = WaitingForMe != waiting.Count || messages.Count > 0;
         WaitingForMe = waiting.Count;
-        foreach (var r in forMe.Concat(mine)) _seen[r.Number] = r.Status.ToString();
+        foreach (var r in forMe.Concat(mine).Concat(copied)) _seen[r.Number] = r.Status.ToString();
         Save();
 
         if (announce && messages.Count > 0)
