@@ -183,6 +183,27 @@ namespace SwVault.AddIn.Sw
             return ok;
         }
 
+        /// <summary>Saves the document under a new path; the open document then refers to the new file.</summary>
+        public bool SaveAs(IModelDoc2 doc, string target)
+        {
+            Directory.CreateDirectory(System.IO.Path.GetDirectoryName(target));
+            int errors = 0, warnings = 0;
+            var ok = doc.Extension.SaveAs3(target, (int)swSaveAsVersion_e.swSaveAsCurrentVersion, (int)swSaveAsOptions_e.swSaveAsOptions_Silent, null, null, ref errors, ref warnings);
+            if (!ok) Log.Warn("SaveAs to " + target + " failed (errors " + errors + ")");
+            return ok && string.Equals(PathOf(doc), target, StringComparison.OrdinalIgnoreCase);
+        }
+
+        public static string ExtensionFor(IModelDoc2 doc)
+        {
+            switch (doc.GetType())
+            {
+                case (int)swDocumentTypes_e.swDocPART: return ".SLDPRT";
+                case (int)swDocumentTypes_e.swDocASSEMBLY: return ".SLDASM";
+                case (int)swDocumentTypes_e.swDocDRAWING: return ".SLDDRW";
+                default: return "";
+            }
+        }
+
         public bool Export(IModelDoc2 doc, string target)
         {
             Directory.CreateDirectory(System.IO.Path.GetDirectoryName(target));

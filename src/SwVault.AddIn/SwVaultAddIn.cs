@@ -55,6 +55,7 @@ namespace SwVault.AddIn
 
         private static readonly CommandSpec[] Commands =
         {
+            new CommandSpec { Name = "Add to Vault", Hint = "Put this file in the vault in one step: saves it into your vault folder if needed and checks it in", Glyph = 0xE710, Color = Color.FromArgb(0, 150, 136), Callback = nameof(OnAddToVault), Enable = nameof(EnableWithDocument) },
             new CommandSpec { Name = "Check Out", Hint = "Lock the file(s) for editing so nobody else changes them", Glyph = 0xE785, Color = Color.FromArgb(0, 102, 204), Callback = nameof(OnCheckOut), Enable = nameof(EnableWithDocument) },
             new CommandSpec { Name = "Check In", Hint = "Upload your changes as a new version and release the lock", Glyph = 0xE898, Color = Color.FromArgb(46, 139, 87), Callback = nameof(OnCheckIn), Enable = nameof(EnableWithDocument) },
             new CommandSpec { Name = "Undo Check Out", Hint = "Discard your changes and release the lock", Glyph = 0xE7A7, Color = Color.FromArgb(160, 80, 60), Callback = nameof(OnUndoCheckOut), Enable = nameof(EnableWithDocument) },
@@ -235,6 +236,7 @@ namespace SwVault.AddIn
         {
             _taskPaneView = _sw.CreateTaskpaneView2(Icons.TaskPaneIcon(), "SwVault");
             _pane = new VaultPane(_agent, _commands);
+            _pane.AddToVaultRequested += OnAddToVault;
             _pane.CreateControl();
             _taskPaneView.DisplayWindowFromHandlex64(_pane.Handle.ToInt64());
         }
@@ -262,8 +264,15 @@ namespace SwVault.AddIn
 
         private void RefreshActive()
         {
-            var path = SwDocs.PathOf(_docs?.ActiveDoc);
+            var path = ActivePath();
             UiThread.Post(() => UiThread.Run("Status", () => _pane.ShowActiveDocAsync(path)));
+        }
+
+        /// <summary>Path of the active document: null when none is open, "" when it has never been saved.</summary>
+        private string ActivePath()
+        {
+            var doc = _docs?.ActiveDoc;
+            return doc == null ? null : SwDocs.PathOf(doc);
         }
 
         /// <summary>After opening a vault file, point out when a newer version exists.</summary>
@@ -278,7 +287,7 @@ namespace SwVault.AddIn
                 if (status == null) return;
                 if (status.LocalState == LocalState.Outdated)
                     ((IFrame)_sw.Frame()).SetStatusBarText("SwVault: a newer version of " + System.IO.Path.GetFileName(fileName) + " exists (v" + status.ServerVersion + ") - use Get Latest.");
-                await _pane.ShowActiveDocAsync(SwDocs.PathOf(_docs.ActiveDoc));
+                await _pane.ShowActiveDocAsync(ActivePath());
             });
         }
 
@@ -299,6 +308,18 @@ namespace SwVault.AddIn
         }
 
         private static void Run(string what, Func<Task> body) => UiThread.Run(what, body);
+
+        public void OnAddToVault() => Run("Add to vault", async () =>
+        {
+            try
+            {
+                await _commands.AddToVaultAsync(_docs.ActiveDoc);
+            }
+            finally
+            {
+                RefreshActive(); // the document may now have a path in the vault
+            }
+        });
 
         public void OnCheckOut() => Run("Check out", () => _commands.CheckOutAsync(Targets()));
 

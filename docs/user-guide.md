@@ -16,6 +16,7 @@ The **SwVault** tab (CommandManager) and the **SwVault task pane** (right side) 
 
 | Command | What it does |
 |---|---|
+| Add to Vault | Puts the active document in the vault in one step. If it has never been saved, or is saved outside your vault folder, you pick where in the vault folder it goes. It is then saved and checked in, together with any new files it references, with the comment "Added <file>". |
 | Check Out | Locks the file(s) and gets the latest version first. For an assembly or drawing, you tick which referenced files you also want to edit. |
 | Check In | Lists what you changed or added under the file (including new parts in an assembly), asks for a comment, uploads, releases. Tick **Keep checked out** to keep working. |
 | Undo Check Out | Throws away your changes and releases the lock. |
@@ -32,7 +33,7 @@ The **SwVault** tab (CommandManager) and the **SwVault task pane** (right side) 
 - Search file names and properties (part numbers, descriptions).
 - Double-click a file to open it. SwVault first offers to get the latest versions of everything it references.
 
-**New files:** save them inside the vault folder. They show as *New* until you check them in. When you check in an assembly, new parts it uses are included automatically.
+**New files:** click **Add to Vault** (on the SwVault tab, or the button at the bottom of the task pane). That's all: SwVault saves the file into your vault folder if it isn't there yet and checks it in, including new parts an assembly uses. Afterwards the file is read-only like every other vault file; check it out to keep editing. You can still save new files inside the vault folder yourself; they show as *New* until you add or check them in.
 
 ## Workflow and revisions
 
