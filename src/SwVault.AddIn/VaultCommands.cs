@@ -544,7 +544,8 @@ namespace SwVault.AddIn
             var team = existing.Length == 0 ? await _agent.GetTeamAsync() : null;
             if (team != null)
             {
-                await SignInToTeamAsync(team);
+                // Team install: the agent's sign-in window (account or invite code) handles it.
+                await _agent.ShowAgentWindowAsync("signIn");
                 return;
             }
             using (var dialog = new VaultSetupDialog(existing))
@@ -564,34 +565,7 @@ namespace SwVault.AddIn
             Changed?.Invoke(new string[0]);
         }
 
-        /// <summary>Team install: user name and password, then the agent downloads the vault in the background.</summary>
-        private async Task SignInToTeamAsync(TeamInfo team)
-        {
-            while (true)
-            {
-                VaultAddRequest request;
-                using (var dialog = new TeamSignInDialog(team))
-                {
-                    if (dialog.ShowDialog(UiThread.Owner) != DialogResult.OK) return;
-                    request = dialog.Request;
-                }
-                var progress = ProgressWindow.ShowFor("Signing in");
-                try
-                {
-                    var vault = await _agent.AddVaultAsync(request);
-                    UiThread.ShowInfo("Signed in to " + vault.Name + " as " + vault.UserLogin + ".\n\nThe files are downloading to " + vault.LocalRoot + " in the background; the SwVault tray icon tells you when they're all there.");
-                    Changed?.Invoke(new string[0]);
-                    return;
-                }
-                catch (AgentException ex) when (ex.Code == ErrorCodes.Unauthorized)
-                {
-                    UiThread.ShowError(ex.Message);
-                }
-                finally
-                {
-                    progress.Close();
-                }
-            }
-        }
+        /// <summary>Vault admins: the agent's Invite People window (makes a link + code to send).</summary>
+        public Task InvitePeopleAsync() => _agent.ShowAgentWindowAsync("invite");
     }
 }

@@ -5,7 +5,8 @@
   "Web": {
     "${TS_CERT_DOMAIN}:443": {
       "Handlers": {
-        "/": { "Proxy": "http://127.0.0.1:3000" }
+        "/": { "Proxy": "http://127.0.0.1:3000" },
+        "/swvault-invites/": { "Proxy": "http://127.0.0.1:3100" }
       }
     }
   },

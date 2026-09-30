@@ -169,6 +169,10 @@ namespace SwVault.AddIn
         /// <summary>The team vault this install was packaged for, or null.</summary>
         public Task<TeamInfo> GetTeamAsync() => CallAsync<object, TeamInfo>(Methods.TeamGet, null);
 
+        /// <summary>Opens one of the agent's windows ("signIn", "invite") in front of SOLIDWORKS.</summary>
+        public Task ShowAgentWindowAsync(string what, string path = null) =>
+            CallAsync<UiShowRequest, object>(Methods.UiShow, new UiShowRequest { What = what, Path = path });
+
         public Task<VaultInfo> AddVaultAsync(VaultAddRequest request) => CallAsync<VaultAddRequest, VaultInfo>(Methods.VaultAdd, request);
 
         public Task<VaultInfo> SyncVaultAsync(string vaultId) => CallAsync<VaultRequest, VaultInfo>(Methods.VaultSync, new VaultRequest { VaultId = vaultId });

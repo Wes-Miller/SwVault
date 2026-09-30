@@ -68,7 +68,31 @@ LOCAL_ROOT="$(ask LOCAL_ROOT 'Vault folder on every Windows PC' "C:\\SWVault\\$T
 SW_VERSION="$(ask SW_VERSION 'SOLIDWORKS version everyone uses (e.g. 2025; empty = no check)' '')"
 TS_HOSTNAME="$(ask TS_HOSTNAME 'Server name (becomes https://<name>.<tailnet>.ts.net)' 'swvault')"
 BACKUP_DIR="$(ask BACKUP_DIR 'Backup folder (best on a second disk or USB drive)' '/var/backups/swvault')"
-for kv in TEAM_NAME ORG REPO ADMIN_USER LOCAL_ROOT SW_VERSION TS_HOSTNAME BACKUP_DIR; do env_set "$kv" "${!kv}"; done
+EMAIL_DOMAINS="$(ask EMAIL_DOMAINS 'New members must verify an email at (domain; "none" for no check)' 'colorado.edu')"
+for kv in TEAM_NAME ORG REPO ADMIN_USER LOCAL_ROOT SW_VERSION TS_HOSTNAME BACKUP_DIR EMAIL_DOMAINS; do env_set "$kv" "${!kv}"; done
+
+if [[ "$EMAIL_DOMAINS" != none && -z "$(env_get SMTP_HOST)" ]]; then
+    echo
+    say "Email for verification codes"
+    cat <<'EOF'
+The server emails new members a code to prove they have that address. It needs an email
+account to send from. Easiest: a Gmail account for the team (e.g. fsae.swvault@gmail.com):
+  1. Turn on 2-Step Verification: https://myaccount.google.com/security
+  2. Create an app password:      https://myaccount.google.com/apppasswords
+  3. Enter smtp.gmail.com, port 587, the Gmail address and the 16-letter app password below.
+EOF
+    smtp_host="$(ask SMTP_HOST 'SMTP server' 'smtp.gmail.com')"
+    smtp_port="$(ask SMTP_PORT 'SMTP port' '587')"
+    smtp_user="$(ask SMTP_USER 'Email address to send from' '')"
+    read -r -s -p "Password / app password for $smtp_user: " smtp_password </dev/tty
+    echo
+    env_set SMTP_HOST "$smtp_host"
+    env_set SMTP_PORT "$smtp_port"
+    env_set SMTP_USER "$smtp_user"
+    env_set SMTP_FROM "$smtp_user"
+    # docker compose expands $ in .env; $$ is a literal $.
+    env_set SMTP_PASSWORD "${smtp_password//\$/\$\$}"
+fi
 [[ "$ORG" =~ ^[a-z0-9][a-z0-9._-]*$ ]] || die "Organization name '$ORG' must be lowercase letters, digits, - . _"
 [[ "$ADMIN_USER" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || die "User name '$ADMIN_USER' may only contain letters, digits, - . _"
 
@@ -78,9 +102,13 @@ for key in GITEA_SECRET_KEY GITEA_INTERNAL_TOKEN GITEA_LFS_JWT_SECRET GITEA_OAUT
     [[ -n "$(env_get "$key")" ]] || env_set "$key" "$(secret)"
 done
 
-mkdir -p "$DATA_DIR/tailscale" "$DATA_DIR/gitea"
+mkdir -p "$DATA_DIR/tailscale" "$DATA_DIR/gitea" "$DATA_DIR/invites"
 chown 1000:1000 "$DATA_DIR/gitea"
 chmod 700 "$DATA_DIR"
+# Must exist as a file before the invite service starts (Docker would create a directory in its
+# place). Filled in below; written in place so the container sees the token.
+touch "$ADMIN_TOKEN_FILE"
+chmod 600 "$ADMIN_TOKEN_FILE"
 
 # ------------------------------------------------------------------ 3. Tailscale
 say "Starting Tailscale"
@@ -148,12 +176,17 @@ fi
 say "Creating organization '$ORG', teams and repository '$REPO'"
 API_OK_CODES="409 422"
 api POST orgs "$(jq -n --arg o "$ORG" --arg n "$TEAM_NAME" '{username: $o, full_name: $n, visibility: "private"}')" >/dev/null
+# repo.code = files; repo.issues = review requests (Designers can request/answer, Viewers can read).
 for spec in "Designers:write:Can check files out and in" "Viewers:read:Can open and download files only"; do
     IFS=: read -r name perm description <<<"$spec"
-    if [[ -z "$(team_id "$ORG" "$name")" ]]; then
-        api POST "orgs/$ORG/teams" "$(jq -n --arg n "$name" --arg p "$perm" --arg d "$description" \
-            '{name: $n, description: $d, permission: $p, includes_all_repositories: true, can_create_org_repo: false,
-              units: ["repo.code"], units_map: {"repo.code": $p}}')" >/dev/null
+    team_json="$(jq -n --arg n "$name" --arg p "$perm" --arg d "$description" \
+        '{name: $n, description: $d, permission: $p, includes_all_repositories: true, can_create_org_repo: false,
+          units: ["repo.code", "repo.issues"], units_map: {"repo.code": $p, "repo.issues": $p}}')"
+    id="$(team_id "$ORG" "$name")"
+    if [[ -z "$id" ]]; then
+        api POST "orgs/$ORG/teams" "$team_json" >/dev/null
+    else
+        api PATCH "teams/$id" "$team_json" >/dev/null   # older setups: add review requests
     fi
 done
 api POST "orgs/$ORG/repos" "$(jq -n --arg r "$REPO" '{name: $r, private: true, default_branch: "main", auto_init: false}')" >/dev/null
@@ -161,10 +194,25 @@ api POST "orgs/$ORG/repos" "$(jq -n --arg r "$REPO" '{name: $r, private: true, d
 if ! api GET "repos/$ORG/$REPO/branch_protections" | jq -e '.[] | select(.rule_name == "main")' >/dev/null; then
     api POST "repos/$ORG/$REPO/branch_protections" '{"rule_name": "main", "enable_push": true}' >/dev/null
 fi
+# Labels for review requests (SwVault creates missing ones too; see Core/Client/Reviews.cs).
+existing_labels="$(api GET "repos/$ORG/$REPO/labels?limit=100" | jq -r '.[].name')"
+for spec in "review:#6f42c1" "review: design:#0366d6" "review: simulation:#0e8a16" "review: drawing:#d93f0b" \
+            "review: approved:#2cbe4e" "review: changes requested:#fbca04" "review: cancelled:#8b949e"; do
+    name="${spec%:*}"; color="${spec##*:}"
+    grep -qxF "$name" <<<"$existing_labels" && continue
+    api POST "repos/$ORG/$REPO/labels" "$(jq -n --arg n "$name" --arg c "$color" '{name: $n, color: $c, description: "SwVault review requests"}')" >/dev/null
+done
 API_OK_CODES=""
 
 write_team_json
 chmod 644 "$TEAM_FILE"
+
+if [[ "$(env_get EMAIL_DOMAINS)" != none && -n "$(env_get SMTP_HOST)" && -z "$(env_get EMAIL_TESTED)" ]]; then
+    read -r -p "Send a test email to check the email settings? Address (Enter to skip): " test_to </dev/tty
+    if [[ -n "$test_to" ]]; then
+        if "$SWVAULT_DIR/swvault-admin.sh" test-email "$test_to"; then env_set EMAIL_TESTED yes; fi
+    fi
+fi
 
 # ------------------------------------------------------------------ 5. keep it running
 say "Scheduling nightly backups and a health watchdog"
@@ -249,12 +297,14 @@ cat <<EOF
 Your admin sign-in is in $DATA_DIR/admin-credentials.txt (only root can read it).
 
 Next steps:
-  1. Copy $TEAM_FILE to your Windows build PC and build the team installer:
-       .\\scripts\\package.ps1 -TeamConfig team.json
+  1. Copy $TEAM_FILE to your Windows build PC, build the team installer and publish it
+     to this server (asks for your admin sign-in):
+       .\\scripts\\package.ps1 -TeamConfig team.json -Publish
   2. Install it on your own PC first and sign in as '$ADMIN_USER'. That sets up the vault
      (you become its admin and approver).
-  3. Add members:  sudo ./swvault-admin.sh add-user <name>   (prints their password)
-     and send them the installer zip.
+  3. Invite your team: SOLIDWORKS > SwVault tab > Invite People (or the tray icon), then
+     Copy message and paste it into your team chat. People join with the link and code.
+     (Or from here: sudo ./swvault-admin.sh invite --uses 20)
   4. Import existing files from SOLIDWORKS: SwVault tab > Import Folder.
 
 Backups go to $BACKUP_DIR every night. Copy them somewhere else now and then.

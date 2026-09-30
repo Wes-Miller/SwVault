@@ -6,6 +6,8 @@ SwVault is PDM for SOLIDWORKS teams that runs on a free Git LFS server, typicall
 - **Assembly-aware operations.** Check-out, check-in and get latest follow assembly and drawing references, and you can see where a file is used.
 - **History and rollback.** Every version is kept. You can get an older version, "as built" with its references, or roll back to it.
 - **A release workflow.** Files move WIP → In Review → Released. Revision letters are stamped into the file on release, and PDF/STEP files can be exported automatically.
+- **Review requests.** Members ask a subteam lead for a design, simulation or drawing review of a file. Leads approve it or send it back with feedback, and both sides get an email and a notification.
+- **Easy onboarding.** Admins send an invite link. New members install, verify their school email, and choose a user name and password.
 - **Bulk import.** An existing folder of files can be imported, and assembly references are re-pointed to the imported copies.
 
 Everything happens inside SOLIDWORKS through the SwVault add-in, which has its own tab and a task pane.

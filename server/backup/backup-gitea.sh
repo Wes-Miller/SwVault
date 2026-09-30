@@ -21,7 +21,8 @@ docker compose exec -T -u git gitea rm -f /tmp/swvault-dump.tar.gz
 # Server settings and identity (server/linux layout): .env with Gitea secrets, Tailscale node
 # state (keeps the same https://... address after a restore), admin token, team.json. Small.
 config=()
-for f in .env team.json data/admin-token data/admin-credentials.txt data/tailscale; do
+# data/invites/*.json: invites, member/lead profiles, which review emails went out (not the installer zip).
+for f in .env team.json data/admin-token data/admin-credentials.txt data/tailscale data/invites/invites.json data/invites/people.json data/invites/review-emails.json; do
   if [[ -e "$COMPOSE_DIR/$f" ]]; then config+=("$f"); fi
 done
 if ((${#config[@]} > 0)); then

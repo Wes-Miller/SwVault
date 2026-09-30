@@ -19,6 +19,8 @@ namespace SwVault.Protocol
         public const string VaultsList = "vaults.list";
         public const string VaultAdd = "vault.add";
         public const string TeamGet = "team.get";
+        /// <summary>Opens one of the agent's windows ("signIn", "invite") so the add-in doesn't duplicate them.</summary>
+        public const string UiShow = "ui.show";
         public const string VaultSync = "vault.sync";
         public const string StatusGet = "status.get";
         public const string StatusFolder = "status.folder";

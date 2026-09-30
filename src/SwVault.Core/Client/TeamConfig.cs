@@ -26,6 +26,9 @@ public sealed class TeamConfig
     /// <summary>Server login that initializes the vault on first sign-in and becomes its admin.</summary>
     public string? Admin { get; set; }
 
+    /// <summary>Optional invite code baked into a package (package.ps1 -InviteCode); new members then only pick a user name and password.</summary>
+    public string? InviteCode { get; set; }
+
     /// <summary>Download every file right after the first sign-in.</summary>
     public bool DownloadAllOnJoin { get; set; } = true;
 
@@ -77,7 +80,7 @@ public static class TeamJoin
     {
         var apiBase = new Uri(HostAdapters.ParseRemote(vaultUrl).Base, "api/v1/");
         var tokenName = $"SwVault {Environment.MachineName} {DateTime.Now:yyyy-MM-dd HHmmss}";
-        var body = JsonSerializer.Serialize(new { name = tokenName, scopes = new[] { "write:repository", "read:user", "read:organization" } });
+        var body = JsonSerializer.Serialize(new { name = tokenName, scopes = new[] { "write:repository", "write:issue", "read:user", "read:organization" } });
         using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(60) };
         using var request = new HttpRequestMessage(HttpMethod.Post, new Uri(apiBase, $"users/{Uri.EscapeDataString(userName)}/tokens"))
         {

@@ -63,8 +63,11 @@ namespace SwVault.AddIn
             new CommandSpec { Name = "History", Hint = "Versions, comments, get an older version or roll back", Glyph = 0xE81C, Color = Color.FromArgb(90, 90, 160), Callback = nameof(OnHistory), Enable = nameof(EnableWithDocument) },
             new CommandSpec { Name = "Where Used", Hint = "Assemblies and drawings that use this file", Glyph = 0xE71B, Color = Color.FromArgb(90, 120, 140), Callback = nameof(OnWhereUsed), Enable = nameof(EnableWithDocument) },
             new CommandSpec { Name = "Change State", Hint = "Submit for review, approve/release, change request", Glyph = 0xE7C1, Color = Color.FromArgb(128, 64, 160), Callback = nameof(OnChangeState), Enable = nameof(EnableWithDocument) },
+            new CommandSpec { Name = "Request Review", Hint = "Ask a subteam lead for a design, simulation or drawing review of this file", Glyph = 0xE8F2, Color = Color.FromArgb(180, 90, 0), Callback = nameof(OnRequestReview), Enable = nameof(EnableWithDocument) },
+            new CommandSpec { Name = "Reviews", Hint = "Review requests for you (as a lead) and the ones you sent", Glyph = 0xE8BD, Color = Color.FromArgb(180, 90, 0), Callback = nameof(OnReviews), Enable = nameof(EnableAlways) },
             new CommandSpec { Name = "Import Folder", Hint = "Copy an existing folder of SOLIDWORKS files into the vault, fixing references", Glyph = 0xE8B5, Color = Color.FromArgb(70, 110, 70), Callback = nameof(OnImport), Enable = nameof(EnableAlways) },
             new CommandSpec { Name = "Refresh", Hint = "Check the server for new versions and check-outs", Glyph = 0xE72C, Color = Color.FromArgb(100, 100, 100), Callback = nameof(OnRefresh), Enable = nameof(EnableAlways) },
+            new CommandSpec { Name = "Invite People", Hint = "Vault admins: make an invite link to send to new team members", Glyph = 0xE8FA, Color = Color.FromArgb(0, 120, 212), Callback = nameof(OnInvite), Enable = nameof(EnableAlways) },
             new CommandSpec { Name = "Vaults", Hint = "Connect this PC to a vault", Glyph = 0xE713, Color = Color.FromArgb(100, 100, 100), Callback = nameof(OnSettings), Enable = nameof(EnableAlways) },
         };
 
@@ -343,6 +346,16 @@ namespace SwVault.AddIn
         });
 
         public void OnRefresh() => Run("Refresh", () => _pane.RefreshAllAsync(sync: true));
+
+        public void OnRequestReview() => Run("Request review", async () =>
+        {
+            var t = Targets();
+            if (t.Count > 0) await _agent.ShowAgentWindowAsync("requestReview", t[0]);
+        });
+
+        public void OnReviews() => Run("Reviews", () => _agent.ShowAgentWindowAsync("reviews"));
+
+        public void OnInvite() => Run("Invite people", () => _commands.InvitePeopleAsync());
 
         public void OnSettings() => Run("Vaults", async () =>
         {

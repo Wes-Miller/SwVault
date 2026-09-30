@@ -48,7 +48,7 @@ gen_password() {
     printf '%s' "$out"
 }
 
-gitea_cli() { compose exec -T -u git gitea gitea "$@"; }
+gitea_cli() { compose exec -T -u git gitea gitea "$@" </dev/null; }
 
 wait_gitea() {
     local deadline=$((SECONDS + ${1:-180}))

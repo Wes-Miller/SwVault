@@ -104,6 +104,14 @@ namespace SwVault.Protocol
         [DataMember(Name = "password", EmitDefaultValue = false)] public string Password { get; set; }
     }
 
+    [DataContract]
+    public sealed class UiShowRequest
+    {
+        [DataMember(Name = "what")] public string What { get; set; }
+        /// <summary>For "requestReview": the local file to review.</summary>
+        [DataMember(Name = "path", EmitDefaultValue = false)] public string Path { get; set; }
+    }
+
     /// <summary>The team vault this install was packaged for (team.json), if any.</summary>
     [DataContract]
     public sealed class TeamInfo

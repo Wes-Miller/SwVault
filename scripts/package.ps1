@@ -14,19 +14,30 @@
 .PARAMETER TeamConfig
   team.json written by server/linux/setup.sh (or swvault-admin.sh client-config).
 
+.PARAMETER Publish
+  Upload the finished zip to the team's vault server, so invite links can offer it for download
+  (https://<server>/swvault-invites/download). Asks for your admin user name and password.
+
+.PARAMETER InviteCode
+  Bake an invite code into this package (for a zip you hand out yourself, e.g. on a USB stick).
+  Invite links from the server don't need this; they carry the code in the zip's name.
+
 .PARAMETER MinGitUrl
   MinGit zip to bundle. Default: the newest 64-bit MinGit release of Git for Windows.
   Pass -MinGitUrl none to leave Git out (members then need Git for Windows installed).
 
 .EXAMPLE
-  .\scripts\package.ps1 -Version 0.2.0 -TeamConfig .\team.json
+  .\scripts\package.ps1 -Version 0.2.0 -TeamConfig .\team.json -Publish
 #>
 [CmdletBinding()]
 param(
     [string]$Version = '0.1.0',
     [string]$TeamConfig,
-    [string]$MinGitUrl
+    [string]$MinGitUrl,
+    [switch]$Publish,
+    [string]$InviteCode
 )
+if ($Publish -and -not $TeamConfig) { throw '-Publish needs -TeamConfig (it says which server to publish to).' }
 
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path $PSScriptRoot -Parent
@@ -55,7 +66,13 @@ Copy-Item (Join-Path $addInOut '*') (Join-Path $stage 'addin') -Recurse -Force
 if ($TeamConfig) {
     $team = Get-Content $TeamConfig -Raw | ConvertFrom-Json
     if (-not $team.vaultUrl) { throw "$TeamConfig has no vaultUrl." }
-    Copy-Item $TeamConfig (Join-Path $stage 'bin\team.json')
+    if ($InviteCode) {
+        $team | Add-Member -NotePropertyName inviteCode -NotePropertyValue $InviteCode -Force
+        $team | ConvertTo-Json | Set-Content (Join-Path $stage 'bin\team.json') -Encoding UTF8
+        if ($Publish) { Write-Warning 'The published installer will carry this invite code; anyone who downloads it can use it.' }
+    } else {
+        Copy-Item $TeamConfig (Join-Path $stage 'bin\team.json')
+    }
     Write-Host "Team: $($team.name) -> $($team.vaultUrl)"
 }
 
@@ -85,3 +102,17 @@ Copy-Item (Join-Path $PSScriptRoot 'install\INSTALL.txt') $stage
 if (Test-Path $zip) { Remove-Item $zip -Force }
 Compress-Archive -Path (Join-Path $stage '*') -DestinationPath $zip
 Write-Host "Package: $zip ($([math]::Round((Get-Item $zip).Length / 1MB)) MB)"
+
+if ($Publish) {
+    $vaultUrl = [Uri](Get-Content $TeamConfig -Raw | ConvertFrom-Json).vaultUrl
+    $segments = $vaultUrl.AbsolutePath.Trim('/').Split('/')
+    $prefix = ($segments | Select-Object -First ($segments.Length - 2)) -join '/'
+    $base = $vaultUrl.GetLeftPart([UriPartial]::Authority) + '/' + $(if ($prefix) { "$prefix/" } else { '' })
+    $credential = Get-Credential -Message "Admin sign-in for $base (to publish the installer)"
+    $pair = "$($credential.UserName):$($credential.GetNetworkCredential().Password)"
+    $headers = @{ Authorization = 'Basic ' + [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($pair)) }
+    Write-Host "Uploading to $base ..."
+    Invoke-RestMethod -Method Put -Uri "${base}swvault-invites/installer" -Headers $headers -InFile $zip -ContentType 'application/zip' | Out-Null
+    Write-Host "Published: ${base}swvault-invites/download"
+    Write-Host 'Invite people from SOLIDWORKS (SwVault tab > Invite People) or the tray icon.'
+}

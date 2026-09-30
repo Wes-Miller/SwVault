@@ -235,3 +235,67 @@ public class TeamConfigTests
         Assert.True(team.DownloadAllOnJoin);
     }
 }
+
+public class TeamInviteTests
+{
+    [Theory]
+    [InlineData("K7QM-R3XT-9BWE", "K7QM-R3XT-9BWE")]
+    [InlineData("k7qm r3xt 9bwe", "K7QM-R3XT-9BWE")]
+    [InlineData("k7qmr3xt9bwe", "K7QM-R3XT-9BWE")]
+    [InlineData(@"C:\Users\a\Downloads\SwVault-FSAE-invite-K7QM-R3XT-9BWE", "K7QM-R3XT-9BWE")]
+    [InlineData("K7QM-R3XT", null)]
+    [InlineData("O0I1-R3XT-9BWE", null)] // look-alike characters are never in codes
+    [InlineData("", null)]
+    public void NormalizeCode(string input, string? expected) => Assert.Equal(expected, TeamInvites.NormalizeCode(input));
+
+    [Fact]
+    public void ServiceUrlSitsNextToTheServer()
+    {
+        Assert.Equal("https://swvault.tail1234.ts.net/swvault-invites/", TeamInvites.ServiceUrl("https://swvault.tail1234.ts.net/fsae/cad.git").ToString());
+        Assert.Equal("https://swvault.tail1234.ts.net/swvault-invites/download?invite=K7QM-R3XT-9BWE",
+            TeamInvites.DownloadUrl("https://swvault.tail1234.ts.net/fsae/cad.git", "K7QM-R3XT-9BWE").ToString());
+    }
+}
+
+public class ReviewParsingTests
+{
+    private static System.Text.Json.JsonElement Issue(string body, string state, params string[] labels) =>
+        System.Text.Json.JsonDocument.Parse(System.Text.Json.JsonSerializer.Serialize(new
+        {
+            number = 7,
+            body,
+            state,
+            html_url = "https://x/fsae/cad/issues/7",
+            created_at = "2026-09-30T10:00:00Z",
+            updated_at = "2026-09-30T11:00:00Z",
+            user = new { login = "eli" },
+            assignees = new[] { new { login = "dana" } },
+            labels = labels.Select(l => new { name = l }).ToArray(),
+        })).RootElement;
+
+    private const string Body = "<!-- swvault-review {\"kind\":\"simulation\",\"path\":\"Chassis/Frame.SLDPRT\",\"version\":3} -->\n**Simulation review** requested by @eli\n\n> check FOS\n> at the tabs\n";
+
+    [Fact]
+    public void ReadsTheRequest()
+    {
+        var r = Reviews.Parse(Issue(Body, "open", "review", "review: simulation"))!;
+        Assert.Equal(ReviewKind.Simulation, r.Kind);
+        Assert.Equal("Chassis/Frame.SLDPRT", r.Path);
+        Assert.Equal(3, r.Version);
+        Assert.Equal("eli", r.Requester);
+        Assert.Equal("dana", r.Lead);
+        Assert.Equal("check FOS\nat the tabs", r.Message);
+        Assert.Equal(ReviewStatus.Waiting, r.Status);
+    }
+
+    [Theory]
+    [InlineData("open", "review: changes requested", ReviewStatus.ChangesRequested)]
+    [InlineData("closed", "review: approved", ReviewStatus.Approved)]
+    [InlineData("closed", "review: cancelled", ReviewStatus.Cancelled)]
+    [InlineData("closed", "review", ReviewStatus.Cancelled)] // closed on the web without a decision
+    public void StatusComesFromLabels(string state, string label, ReviewStatus expected) =>
+        Assert.Equal(expected, Reviews.Parse(Issue(Body, state, "review", label))!.Status);
+
+    [Fact]
+    public void IgnoresOtherIssues() => Assert.Null(Reviews.Parse(Issue("Just a normal issue", "open")));
+}

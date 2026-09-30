@@ -12,7 +12,7 @@ This sets up the vault server on any 64-bit Linux PC: an old laptop, a mini PC o
 Team PCs (Windows + SOLIDWORKS)                 Linux PC (anywhere with internet)
 +----------------------------+    HTTPS    +---------------------+    +---------------------------+
 | SwVault add-in + agent     | ----------> | Tailscale Funnel    | -> | tailscale container       |
-| (package with team.json)   |  *.ts.net   | (public relay)      |    |  + gitea container        |
+| (package with team.json)   |  *.ts.net   | (public relay)      |    |  + gitea, team service    |
 +----------------------------+             +---------------------+    |  data/ : repos, LFS files |
                                                                         +---------------------------+
 ```
@@ -28,6 +28,7 @@ Team PCs (Windows + SOLIDWORKS)                 Linux PC (anywhere with internet
 - Ideally a second drive or a USB disk for backups.
 - A free Tailscale account: <https://login.tailscale.com>. Sign in with Google, Microsoft or GitHub.
 - A Windows PC with the .NET 10 SDK, to build the team installer (the same PC you build SwVault on).
+- An email account for the server to send from, if new members must verify a school address (the default is @colorado.edu). A free Gmail account with an app password works; see step 2.
 
 ## 1. Get a Tailscale auth key (once, 5 minutes)
 
@@ -61,13 +62,17 @@ It asks for:
 | SOLIDWORKS version | `2025` | Blocks check-ins from a newer release. Leave empty to allow any. |
 | Server name | `swvault` | The address becomes `https://swvault.<your-tailnet>.ts.net`. |
 | Backup folder | `/mnt/usb/swvault-backup` | Ideally on a second disk. |
+| Email domain to verify | `colorado.edu` | New members must prove they have an address there. `none` turns the check off. |
+| SMTP server, port, address, password | `smtp.gmail.com`, `587`, `fsae.swvault@gmail.com`, app password | Only when verifying emails. The server uses this account to send verification codes and review emails. |
 | Tailscale auth key | `tskey-auth-...` | From step 1. |
+
+**Setting up a Gmail account to send from (5 minutes):** create a Gmail account for the team, turn on 2-Step Verification (<https://myaccount.google.com/security>), then create an app password (<https://myaccount.google.com/apppasswords>). Enter the Gmail address and the 16-letter app password when setup asks. Setup can then send you a test email; `sudo ./swvault-admin.sh test-email you@colorado.edu` sends another any time.
 
 Then it:
 
 - installs Docker, jq and curl;
-- starts Tailscale and Gitea;
-- creates your admin account, the organization, the **Designers** (read/write) and **Viewers** (read-only) teams, and the vault repository, with `main` protected against force-push;
+- starts Tailscale, Gitea and the SwVault team service (invites, email checks, profiles, review emails);
+- creates your admin account, the organization, the **Designers** (read/write) and **Viewers** (read-only) teams, and the vault repository with its review labels, with `main` protected against force-push;
 - writes `team.json`;
 - schedules nightly backups (03:15) and a 5-minute health watchdog;
 - offers to stop the PC from sleeping, including ignoring a closed laptop lid;
@@ -80,7 +85,7 @@ Your admin password is in `data/admin-credentials.txt`, readable by root only. R
 Copy `server/linux/team.json` to your Windows build PC and run:
 
 ```powershell
-.\scripts\package.ps1 -Version 0.2.0 -TeamConfig .\team.json
+.\scripts\package.ps1 -Version 0.2.0 -TeamConfig .\team.json -Publish
 ```
 
 This produces `dist\SwVault-FSAE-0.2.0.zip`, containing:
@@ -89,41 +94,64 @@ This produces `dist\SwVault-FSAE-0.2.0.zip`, containing:
 - **MinGit**, a portable Git that the script downloads, so members don't install Git;
 - `team.json`, so the installer knows which vault to join.
 
-Put the zip somewhere the team can download it, such as a shared drive or Teams.
+`-Publish` asks for your admin user name and password and uploads the zip to the server. Invite links then download it from `https://<server>/swvault-invites/download`. Run the same command again whenever you update SwVault. Without `-Publish`, share the zip yourself (for example on a shared drive).
 
 ## 4. Sign in once yourself
 
 Install the zip on your own PC (double-click **Install SwVault.cmd**) and sign in with your admin user name and password. Because the vault is new, your first sign-in sets it up: SwVault writes `.swvault/vault.json` with you as admin and approver.
 
-## 5. Add your team
+## 5. Invite your team
 
-```bash
-sudo ./swvault-admin.sh add-user alice --name "Alice Smith"   # designer: check out / check in
-sudo ./swvault-admin.sh add-user bob --viewer                 # read-only
-sudo ./swvault-admin.sh add-user carol --approver             # designer who can release files
-```
+In SOLIDWORKS, go to the **SwVault** tab → **Invite People** (or the SwVault tray icon → **Invite people...**):
 
-Each command prints a short card with the user name, a generated password and three install steps. Send it to the person privately, along with the installer zip.
+1. Pick **Designer** (check out/in) or **Viewer** (read-only), how many people the invite is for, and how many days it lasts. One invite can cover the whole team: say, 25 people for 14 days.
+2. Click **Create invite**. A ready-made message is copied to your clipboard:
+   > You're invited to the FSAE vault… 1. Download the installer: https://swvault…/swvault-invites/download?invite=K7QM-R3XT-9BWE …
+3. Paste it into your team chat or an email.
 
-For the member, that's all:
+Revoke an invite any time from the same window. Only vault admins (the Owners team) can create invites. From the server, `sudo ./swvault-admin.sh invite --uses 25 --days 14` does the same.
 
-1. Double-click **Install SwVault.cmd** and approve the prompt.
-2. Sign in when the SwVault window appears.
-3. The files download to `C:\SWVault\FSAE`. A tray notification says when they're all there.
-4. Open SOLIDWORKS: the SwVault tab and task pane are ready.
+For the new member, that's all:
+
+1. Click the link, right-click the zip → **Extract All**, and double-click **Install SwVault.cmd**. The download is named after the invite, so the installer fills in the code.
+2. In the SwVault window, choose **I'm new and have an invite**:
+   - enter their school email, click **Email me a code**, and type in the 6-digit code;
+   - enter their name, and pick **General member** or **Subteam lead of** (for example Chassis);
+   - choose a user name and password.
+3. The account is created, they're signed in, and the files download to `C:\SWVault\FSAE`. A tray notification says when they're all there.
+4. They open SOLIDWORKS: the SwVault tab and task pane are ready.
+
+The invite's limits (number of people, expiry, one account per email address) and the email check keep strangers out even if the link is shared further than you meant.
+
+**Adding someone by hand instead** (no invite, no email check): `sudo ./swvault-admin.sh add-user alice --name "Alice Smith" --email alice@colorado.edu` prints a card with a generated password to send them privately. Add `--viewer`, `--approver` or `--admin` as needed. Give `--email` so they get review emails.
+
+## Subteam leads and review requests
+
+Everyone is either a **general member** or a **subteam lead** (with the subteam's name). People pick this when they join, and change it with the tray icon → **My team role...**. Existing accounts are asked once after signing in. An admin can also set it: `sudo ./swvault-admin.sh set-lead eli Suspension` or `set-lead eli --member`.
+
+Members ask a lead for a review from SOLIDWORKS: open the file, then **SwVault tab → Request Review**. They choose **Design**, **Simulation** or **Drawing**, pick the lead (the list shows each lead's subteam) and add a note. The file must be checked in, so the lead reviews that exact version.
+
+- **The lead** gets an email and a tray notification, and sees the request under **SwVault tab → Reviews → For me**. From there they open the file, then **Approve**, **Request changes** (with feedback) or **Comment**.
+- **The member** gets an email and a notification when the lead approves or sends it back, with the lead's feedback. They see all their requests under **Reviews → My requests**, where they can reply or cancel.
+
+Each request is also an issue in the vault repository on the server's web page (assigned to the lead, labeled with its kind and status), so the full discussion is kept and backed up. Emails go out once per event: the request opening, an approval, and each round of changes requested. They're only sent to people whose account has a real email address (everyone who joined with an invite does).
 
 ## Everyday admin
 
 | Task | Command |
 |---|---|
 | Is everything up and reachable? | `sudo ./swvault-admin.sh status` |
-| Add / list people | `add-user <name> [--viewer\|--approver\|--admin]`, `list-users` |
+| Invite people | SOLIDWORKS: SwVault tab → **Invite People**. Server: `invite [--viewer] [--uses N] [--days N]`, `invites`, `revoke-invite <code>` |
+| Publish a new installer | `scripts\package.ps1 ... -Publish` (Windows) or `publish-installer <zip>` |
+| Add / list people | `add-user <name> [--viewer\|--approver\|--admin] [--email a@colorado.edu]`, `list-users` (shows each person's team role) |
+| Mark a subteam lead | `set-lead <name> <subteam>`, `set-lead <name> --member` |
+| Check email works | `test-email <address>` |
 | Forgotten password | `reset-password <name>` |
 | Someone leaves | `disable-user <name>`. They can't sign in, and their history is kept. Undo with `enable-user`. |
 | Make someone admin or approver | `set-role <name> admin\|approver [--remove]` |
 | Back up now | `backup` |
 | Update Tailscale | `update` (Gitea is pinned; bump `GITEA_TAG` in `.env` after reading its release notes) |
-| Logs | `logs gitea`, `logs tailscale` |
+| Logs | `logs gitea`, `logs tailscale`, `logs invites` |
 
 Run all of them with `sudo ./swvault-admin.sh` from `server/linux`. Also keep the Linux PC itself updated, for example with `sudo apt upgrade` monthly, or turn on `unattended-upgrades`.
 
@@ -132,7 +160,7 @@ Run all of them with `sudo ./swvault-admin.sh` from `server/linux`. Also keep th
 Every night, `swvault-backup.timer` writes to your backup folder:
 
 - `daily/gitea-*.tar.gz`: Gitea's database, config and repositories. 14 are kept.
-- `daily/server-config-*.tar.gz`: `.env` (Gitea secrets), the Tailscale identity (so a restored server keeps its address), the admin token and `team.json`.
+- `daily/server-config-*.tar.gz`: `.env` (Gitea secrets and email settings), the Tailscale identity (so a restored server keeps its address), the admin token, `team.json`, and the team service's invites, profiles and review-email log.
 - `lfs/`: every file version. It's append-only, so each night copies only what's new.
 
 Copy the backup folder to a second place now and then (another disk, cloud storage).

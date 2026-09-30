@@ -5,8 +5,10 @@ SwVault keeps the team's SOLIDWORKS files on the vault server and makes sure onl
 ## Getting set up
 
 1. Close SOLIDWORKS.
-2. Unzip the SwVault installer your admin sent you and double-click **Install SwVault.cmd**. Approve the prompt.
-3. Sign in with the user name and password your admin sent you when SwVault asks.
+2. Click the download link in your invite, right-click the zip → **Extract All**, and double-click **Install SwVault.cmd**. Approve the prompt.
+3. In the SwVault window:
+   - **New here?** Choose **I'm new and have an invite**. The code is usually filled in already. Enter your school email, click **Email me a code**, and type in the 6-digit code from the email. Then enter your name, say whether you're a **general member** or a **subteam lead** (and which subteam), and choose a user name and password.
+   - **Already have an account?** Choose **I have an account** and sign in.
 4. Your team's files download to the vault folder, for example `C:\SWVault\FSAE`. The SwVault icon in the system tray tells you when they're all there.
 5. Open SOLIDWORKS. The **SwVault** tab and task pane are ready.
 
@@ -34,6 +36,9 @@ The **SwVault** tab (CommandManager) and the **SwVault task pane** (right side) 
 | History | All versions with who, when and comment. **Get This Version** puts an older version in your folder, read-only. Tick "referenced files as they were" for an assembly exactly as it was built. **Roll Back** (after checking out) makes an old version the newest again when you check in. |
 | Where Used | Assemblies and drawings that use this file. |
 | Change State | Workflow: Submit for review → Approve (release) / Reject; Change request to edit a released file again. |
+| Request Review | Asks a subteam lead for a **design**, **simulation** or **drawing** review of the file. You pick the lead and add a note. The lead reviews the version that's checked in. |
+| Reviews | Your review inbox: **For me** (requests sent to you as a lead: open the file, **Approve**, **Request changes**, **Comment**) and **My requests** (what you asked for and what the lead said). |
+| Invite People | Vault admins: makes an invite link and code to paste into the team chat. |
 | Import Folder | Copies an existing folder of SOLIDWORKS files into the vault and fixes the references. Usually done once, by an admin. |
 | Refresh / Vaults | Re-check the server, or connect to a vault. |
 
@@ -44,6 +49,14 @@ The **SwVault** tab (CommandManager) and the **SwVault task pane** (right side) 
 - Double-click a file to open it. SwVault first offers to get the latest versions of everything it references.
 
 **New files:** click **Add to Vault** (on the SwVault tab, or the button at the bottom of the task pane). That's all: SwVault saves the file into your vault folder if it isn't there yet and checks it in, including new parts an assembly uses. Afterwards the file is read-only like every other vault file; check it out to keep editing. You can still save new files inside the vault folder yourself; they show as *New* until you add or check them in.
+
+## Reviews
+
+- **Asking for a review:** check the file in, then **Request Review**. You'll get an email and a tray notification when the lead approves it or asks for changes. If they ask for changes, their feedback is in the email and under **Reviews → My requests**. Make the changes, check in, and request another review.
+- **If you're a lead:** new requests arrive by email and as a tray notification, and wait under **Reviews → For me**. **Request changes** needs a comment saying what to change. **Approve** can have one too.
+- **Your team role** (general member or subteam lead, and which subteam): tray icon → **My team role...**. Only leads appear in the Request Review list.
+
+Reviews are separate from release approval (**Change State → Approve**), which stamps revisions. A review is feedback from your lead. Many teams get a review before submitting a file for release.
 
 ## Workflow and revisions
 

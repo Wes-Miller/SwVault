@@ -30,6 +30,7 @@ services:
     ports:
       # Local-only access for the admin scripts on this machine. Nothing is opened to the LAN.
       - "127.0.0.1:3000:3000"
+      - "127.0.0.1:3100:3100"
 
   gitea:
     image: docker.gitea.com/gitea:${GITEA_TAG:-1.27.3}
@@ -69,3 +70,32 @@ services:
       GITEA__log__LEVEL: Warn
     volumes:
       - ./data/gitea:/data
+
+  # Invite links: people join with a code instead of the admin creating accounts by hand, and
+  # download the team installer from https://<server>/swvault-invites/download (invites/invites.py).
+  invites:
+    image: python:${PYTHON_TAG:-3.13-alpine}
+    network_mode: service:tailscale
+    restart: unless-stopped
+    depends_on:
+      - gitea
+    command: ["python", "-u", "/app/invites.py"]
+    environment:
+      ORG: ${ORG:-team}
+      TEAM_NAME: ${TEAM_NAME:-Team}
+      REPO: ${REPO:-cad}
+      GITEA_URL: http://127.0.0.1:3000
+      ADMIN_TOKEN_FILE: /run/swvault/admin-token
+      STATE_DIR: /data
+      # New members verify an email at these domains (comma-separated; "none" = no check), with a
+      # code sent through this SMTP account (e.g. a Gmail app password). setup.sh asks for these.
+      EMAIL_DOMAINS: ${EMAIL_DOMAINS:-none}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM: ${SMTP_FROM:-}
+    volumes:
+      - ./invites:/app:ro
+      - ./data/admin-token:/run/swvault/admin-token:ro
+      - ./data/invites:/data

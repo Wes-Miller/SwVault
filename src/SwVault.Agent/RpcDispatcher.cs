@@ -14,10 +14,12 @@ internal sealed class RpcDispatcher
     private readonly Action? _onVaultsChanged;
     private readonly TeamConfig? _team;
     private readonly Func<string, string, Task<VaultSession>>? _joinTeam;
+    private readonly Action<string>? _showWindow;
 
     public RpcDispatcher(VaultManager vaults, JobManager jobs, FileLog log, Action? onVaultsChanged = null,
-        TeamConfig? team = null, Func<string, string, Task<VaultSession>>? joinTeam = null)
+        TeamConfig? team = null, Func<string, string, Task<VaultSession>>? joinTeam = null, Action<string>? showWindow = null)
     {
+        _showWindow = showWindow;
         _vaults = vaults;
         _jobs = jobs;
         _log = log;
@@ -98,6 +100,16 @@ internal sealed class RpcDispatcher
                 }
                 _onVaultsChanged?.Invoke();
                 return Describe(session);
+            }
+
+            case Methods.UiShow:
+            {
+                var show = Payload<UiShowRequest>(payload);
+                if (show.What is not ("signIn" or "invite" or "profile" or "reviews" or "requestReview"))
+                    throw VaultException.BadRequest($"Unknown window '{show.What}'.");
+                if (show.What == "requestReview" && string.IsNullOrEmpty(show.Path)) throw VaultException.BadRequest("Which file?");
+                _showWindow?.Invoke(show.What == "requestReview" ? "requestReview|" + show.Path : show.What);
+                return null;
             }
 
             case Methods.TeamGet:

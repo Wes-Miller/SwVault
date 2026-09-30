@@ -28,24 +28,122 @@ internal sealed class TrayContext : ApplicationContext
         _agent.Toast += (title, message) => _ui.BeginInvoke(() => _icon.ShowBalloonTip(8000, title, message, ToolTipIcon.Info));
         BuildMenu();
 
+        // The add-in asks for these windows instead of having its own copies.
+        _agent.WindowRequested += what => _ui.BeginInvoke(() =>
+        {
+            if (_agent.NeedsTeamSignIn) ShowSignIn();
+            else if (what == "invite") ShowInvite();
+            else if (what == "profile") ShowProfile();
+            else if (what == "reviews") ShowReviews();
+            else if (what.StartsWith("requestReview|", StringComparison.Ordinal)) ShowRequestReview(what["requestReview|".Length..]);
+            else ShowVaults();
+        });
+
         // Fresh team install: ask for the user name and password straight away.
         if (_agent.NeedsTeamSignIn) _ui.BeginInvoke(() => ShowSignIn());
     }
 
-    private bool _signInOpen;
+    private Form? _signIn;
+    private Form? _invite;
 
     private void ShowSignIn()
     {
-        if (_signInOpen) return;
-        _signInOpen = true;
+        if (_signIn != null)
+        {
+            _signIn.Activate();
+            return;
+        }
+        bool signedIn;
+        using (var form = _signIn = new SignInForm(_agent))
+        {
+            try
+            {
+                signedIn = form.ShowDialog() == DialogResult.OK;
+            }
+            finally
+            {
+                _signIn = null;
+            }
+        }
+        if (signedIn) _ = AskForProfileIfMissingAsync();
+    }
+
+    /// <summary>After signing in with an existing account: ask "member or lead?" once if unknown.</summary>
+    private async Task AskForProfileIfMissingAsync()
+    {
         try
         {
-            using var form = new SignInForm(_agent);
+            var (directory, me) = await Task.Run(() => _agent.TeamDirectoryAsync());
+            var mine = directory.People.FirstOrDefault(p => string.Equals(p.Login, me, StringComparison.OrdinalIgnoreCase));
+            if (mine != null && mine.Profile == null) ShowProfile(firstTime: true);
+        }
+        catch (Exception ex)
+        {
+            _agent.Log.Warn("Couldn't check the team profile: " + ex.Message);
+        }
+    }
+
+    private Form? _reviews;
+
+    private void ShowReviews()
+    {
+        if (_reviews != null)
+        {
+            _reviews.Activate();
+            return;
+        }
+        var form = _reviews = new ReviewsForm(_agent);
+        form.FormClosed += (_, _) => { _reviews = null; form.Dispose(); };
+        form.Show(); // modeless: keep it open next to SOLIDWORKS
+    }
+
+    private void ShowRequestReview(string path)
+    {
+        using var form = new RequestReviewForm(_agent, path);
+        form.ShowDialog();
+    }
+
+    private Form? _profile;
+
+    private void ShowProfile(bool firstTime = false)
+    {
+        if (_profile != null)
+        {
+            _profile.Activate();
+            return;
+        }
+        using var form = _profile = new ProfileForm(_agent, firstTime);
+        try
+        {
             form.ShowDialog();
         }
         finally
         {
-            _signInOpen = false;
+            _profile = null;
+        }
+    }
+
+    private void ShowInvite()
+    {
+        if (_invite != null)
+        {
+            _invite.Activate();
+            return;
+        }
+        var target = _agent.InviteTarget();
+        if (target == null)
+        {
+            MessageBox.Show("Connect to your team's vault first.", "SwVault", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+        using var form = _invite = new InviteForm(_agent, target.Value.VaultUrl, target.Value.Name);
+        try
+        {
+            form.ShowDialog();
+        }
+        finally
+        {
+            _invite = null;
         }
     }
 
@@ -63,6 +161,13 @@ internal sealed class TrayContext : ApplicationContext
             var root = registration.LocalRoot;
             item.Click += (_, _) => { if (Directory.Exists(root)) Process.Start("explorer.exe", root); };
             menu.Items.Add(item);
+        }
+        if (!_agent.NeedsTeamSignIn && _agent.InviteTarget() != null)
+        {
+            var waiting = _agent.ReviewWatcher.WaitingForMe;
+            menu.Items.Add(waiting > 0 ? $"Reviews ({waiting} waiting for you)..." : "Reviews...", null, (_, _) => ShowReviews());
+            menu.Items.Add("My team role...", null, (_, _) => ShowProfile());
+            menu.Items.Add("Invite people...", null, (_, _) => ShowInvite());
         }
         menu.Items.Add("Sync now", null, (_, _) => _agent.Sync.Poke());
         menu.Items.Add("Vaults...", null, (_, _) => ShowVaults());

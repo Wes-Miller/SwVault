@@ -72,6 +72,12 @@ New-Item -Path 'HKCU:\Software\SwVault' -Force | Out-Null
 Set-ItemProperty -Path 'HKCU:\Software\SwVault' -Name 'AgentPath' -Value $agent
 Set-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name 'SwVaultAgent' -Value "`"$agent`""
 
+# Downloaded through an invite link? The zip (and so the extracted folder) is named
+# ...-invite-XXXX-XXXX-XXXX; save the code so the sign-in window has it filled in.
+if ((Split-Path $here -Leaf) -match 'invite-([2-9A-HJ-NP-Z]{4}-[2-9A-HJ-NP-Z]{4}-[2-9A-HJ-NP-Z]{4})') {
+    Set-ItemProperty -Path 'HKCU:\Software\SwVault' -Name 'InviteCode' -Value $Matches[1]
+}
+
 # Start the agent without elevation (explorer launches it as the signed-in user).
 if ($isAdmin) { Start-Process explorer.exe -ArgumentList "`"$agent`"" } else { Start-Process $agent }
 
@@ -80,7 +86,7 @@ Write-Host ''
 Write-Host 'SwVault installed.'
 if (Test-Path $team) {
     $name = (Get-Content $team -Raw | ConvertFrom-Json).name
-    Write-Host "A SwVault window is asking for your $name user name and password. Sign in, and your files start downloading."
+    Write-Host "A SwVault window is open: sign in, or (new here) choose a user name and password with your invite. Your $name files then start downloading."
     Write-Host 'Then open SOLIDWORKS: the SwVault tab and task pane are ready.'
 } else {
     Write-Host 'Next: click the SwVault tray icon > Vaults... and connect with the URL, user name and token from your admin.'

@@ -300,51 +300,6 @@ namespace SwVault.AddIn.Ui
         };
     }
 
-    /// <summary>Sign in to the team vault this install was packaged for: user name and password only.</summary>
-    internal sealed class TeamSignInDialog : VaultDialog
-    {
-        private readonly TextBox _user = new TextBox { Width = 240 };
-        private readonly TextBox _password = new TextBox { Width = 240, UseSystemPasswordChar = true };
-        private readonly TeamInfo _team;
-
-        public TeamSignInDialog(TeamInfo team) : base("SwVault - Sign in to " + team.Name, 460, 250)
-        {
-            _team = team;
-            var grid = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, Padding = new Padding(12), AutoSize = true };
-            var intro = new Label
-            {
-                AutoSize = true,
-                MaximumSize = new Size(410, 0),
-                Margin = new Padding(0, 0, 0, 10),
-                Text = "Sign in with the user name and password from your team admin. SwVault then downloads the " + team.Name + " files to " + team.LocalRoot + ".",
-            };
-            grid.Controls.Add(intro, 0, 0);
-            grid.SetColumnSpan(intro, 2);
-            grid.Controls.Add(new Label { Text = "User name", AutoSize = true, Anchor = AnchorStyles.Left, Margin = new Padding(0, 6, 8, 0) }, 0, 1);
-            grid.Controls.Add(_user, 1, 1);
-            grid.Controls.Add(new Label { Text = "Password", AutoSize = true, Anchor = AnchorStyles.Left, Margin = new Padding(0, 6, 8, 0) }, 0, 2);
-            grid.Controls.Add(_password, 1, 2);
-            Controls.Add(grid);
-            grid.BringToFront();
-            OkButton.Text = "Sign in";
-            OkButton.Click += (s, e) =>
-            {
-                if (_user.Text.Trim().Length == 0 || _password.Text.Length == 0)
-                {
-                    DialogResult = DialogResult.None;
-                    MessageBox.Show(this, "Enter your user name and password.", "SwVault");
-                }
-            };
-        }
-
-        public VaultAddRequest Request => new VaultAddRequest
-        {
-            RemoteUrl = _team.VaultUrl,
-            UserName = _user.Text.Trim(),
-            Password = _password.Text,
-        };
-    }
-
     /// <summary>Small progress window for vault jobs; stays on top of SOLIDWORKS but doesn't block it.</summary>
     internal sealed class ProgressWindow : Form
     {
