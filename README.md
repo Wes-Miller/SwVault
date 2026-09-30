@@ -1,93 +1,80 @@
 # SwVault
 
-SwVault is PDM for SOLIDWORKS teams that runs on a free Git LFS server, typically a self-hosted Gitea. It provides:
+PDM for SOLIDWORKS teams (check-out/check-in, history, releases, reviews) on a free, self-hosted server. This page is how to set it up. Details: [self-hosting guide](docs/self-hosting-linux.md), [admin guide](docs/admin-guide.md), [user guide](docs/user-guide.md), [architecture](docs/architecture.md).
 
-- **Check-out and check-in.** Checking out locks a file so nobody else can edit it. Checking in uploads the new version and releases the lock.
-- **Assembly-aware operations.** Check-out, check-in and get latest follow assembly and drawing references, and you can see where a file is used.
-- **History and rollback.** Every version is kept. You can get an older version, "as built" with its references, or roll back to it.
-- **A release workflow.** Files move WIP → In Review → Released. Revision letters are stamped into the file on release, and PDF/STEP files can be exported automatically.
-- **Review requests.** Members ask a subteam lead for a design, simulation or drawing review of a file. Leads approve it or send it back with feedback, and both sides get an email and a notification.
-- **Easy onboarding.** Admins send an invite link. New members install, verify their school email, and choose a user name and password.
-- **Bulk import.** An existing folder of files can be imported, and assembly references are re-pointed to the imported copies.
+## What you need
 
-Everything happens inside SOLIDWORKS through the SwVault add-in, which has its own tab and a task pane.
+- **A Linux PC for the server** that stays on and online: an old laptop, a mini PC or a Raspberry Pi 4/5 (64-bit), with 100–500 GB of disk. Ubuntu Server 24.04 LTS is easiest. No port forwarding or static IP needed.
+- **A free Tailscale account** (<https://login.tailscale.com>). It gives the server a public HTTPS address; only the server runs Tailscale.
+- **A Windows PC with the [.NET 10 SDK](https://dotnet.microsoft.com/download)** to build the team installer.
+- **Optional: a Gmail account with an app password** so new members verify their school email and get review emails.
+- Ideally a second drive or USB disk for nightly backups.
 
-## How it works
+## 1. Get a Tailscale auth key
 
+1. Sign in at <https://login.tailscale.com>.
+2. **DNS**: turn on **MagicDNS** and click **Enable HTTPS**.
+3. **Settings → Keys → Generate auth key** (not reusable, not ephemeral). Copy the `tskey-auth-...` key.
+
+## 2. Set up the server (Linux PC)
+
+```bash
+sudo git clone https://github.com/wes-miller/swvault.git /opt/swvault
+cd /opt/swvault/server/linux
+sudo ./setup.sh
 ```
-SLDWORKS.exe                     named pipe                per-user tray process               HTTPS
-+-----------------------+  <--------------------->  +------------------------------+  <------>  Gitea (or GitHub)
-| SwVault.AddIn (net48) |                           | SwVault.Agent (net10)        |            git repo + LFS content
-| tab, task pane,       |   swvault CLI ----------> |  SwVault.Core: mirror, LFS,  |            + LFS file locks
-| dialogs, SW events    |                           |  locks, state, jobs, sync    |
-+-----------------------+                           +------------------------------+
+
+It asks for the team name (e.g. `FSAE`), your admin user name, the vault folder every Windows PC will use (e.g. `C:\SWVault\FSAE`), the SOLIDWORKS version, the email settings and the Tailscale key. It then installs Docker, starts Gitea and the SwVault team service at `https://<name>.<tailnet>.ts.net`, creates the vault, schedules backups, and writes `team.json`. Your admin password is in `data/admin-credentials.txt`. Running it again is safe.
+
+## 3. Build and publish the team installer (Windows)
+
+Copy `server/linux/team.json` to the Windows PC, then in this repository:
+
+```powershell
+.\scripts\package.ps1 -Version 1.0.0 -TeamConfig .\team.json -Publish
 ```
 
-- **Vault = one Git repository.** File content is stored in Git LFS. Check-out uses the LFS File Locking API. A check-in is one git commit containing the LFS pointer file and a metadata sidecar (`.swvault/meta/<path>.json`) for each file. The repository stays a standard Git LFS repository that you can browse in the server's web UI.
-- **Your vault folder (for example `C:\SWVault\FSAE`) is not a git working copy.** The agent manages it file by file, the way PDM manages its local cache:
-  - get latest works on single files or whole assemblies;
-  - files you haven't checked out are read-only;
-  - files you didn't ask for are never touched.
-- **The agent** runs per user in the system tray. It does all network work, polls for new versions and check-outs, shows notifications, and serves the add-in over a named pipe. The add-in only handles SOLIDWORKS-specific work: saving, releasing and reloading open documents, reading references and custom properties, and stamping revisions.
+This builds `dist\SwVault-<Team>-1.0.0.zip` (SwVault, the SOLIDWORKS add-in and a portable Git) and uploads it to your server. Sign in with your admin user name and password when asked.
 
-See [docs/architecture.md](docs/architecture.md), [docs/admin-guide.md](docs/admin-guide.md) and [docs/user-guide.md](docs/user-guide.md).
+## 4. Install it yourself
 
-**Hosting it yourself:** [docs/self-hosting-linux.md](docs/self-hosting-linux.md) sets up the server on any Linux PC, even on an apartment network with no port forwarding, with one script (`server/linux/setup.sh`). It also produces the config for a team installer, so members only install SwVault and sign in.
+Download `https://<your server>/swvault-invites/download`, right-click the zip → **Extract All**, and double-click **Install SwVault.cmd** (close SOLIDWORKS first; one Windows admin prompt). Sign in with your admin account; your first sign-in sets up the vault with you as admin. Open SOLIDWORKS: there's a **SwVault** tab and task pane.
 
-## Repository layout
+To bring in existing files: SwVault tab → **Import Folder**.
 
-| Path | What |
-|---|---|
-| `src/SwVault.Protocol` | Pipe protocol and DTOs (netstandard2.0, no dependencies, shared with the add-in) |
-| `src/SwVault.Core` | Vault engine: pointer-only git mirror, LFS and lock clients, SQLite state, all operations |
-| `src/SwVault.Agent` | Tray agent: pipe server, job runner, sync loop, notifications |
-| `src/SwVault.Cli` | `swvault` command line for scripting, admin and testing |
-| `src/SwVault.AddIn` | SOLIDWORKS add-in (net48 x64) |
-| `tests/` | Unit tests, offline integration tests (fake LFS server), opt-in tests against a real Gitea |
-| `tools/SwApiCheck` | Verifies the SOLIDWORKS API behaviors SwVault relies on (run after SOLIDWORKS upgrades) |
-| `scripts/` | Developer setup: local Gitea, add-in registration |
-| `server/` | Deploying the vault server (Gitea). `server/linux` is the one-script setup for a self-hosted Linux PC (Tailscale Funnel + Gitea in Docker) |
+## 5. Invite your team
 
-## Developer quick start
+SwVault tab → **Invite People** → choose **Designer** or **Viewer**, how many people and how many days → **Create invite**. Paste the copied message into your team chat. Members click the link, run **Install SwVault.cmd**, verify their school email, pick a user name and password, and their files download on their own.
 
-You need:
-- Windows
-- the .NET 10 SDK
-- Git for Windows 2.31 or newer
-- SOLIDWORKS, only needed for the add-in
+Then, in SOLIDWORKS or the SwVault tray icon:
+- **Subsystems** – add the car and its subsystems; members ask to be responsible engineers.
+- **Approvals** (admins) – approve subteam lead and responsible-engineer requests.
+
+## Updating everyone
+
+Build with a higher version and publish it:
+
+```powershell
+.\scripts\package.ps1 -Version 1.1.0 -TeamConfig .\team.json -Publish -Notes "What's new"
+```
+
+Every member gets a notification and an **Install update** item on the tray icon; it installs after they close SOLIDWORKS. Add `-Required` to keep reminding people until they update.
+
+## Day-to-day admin (on the server)
+
+```bash
+cd /opt/swvault/server/linux
+sudo ./swvault-admin.sh status        # is everything up and reachable?
+sudo ./swvault-admin.sh               # list all commands: users, roles, approvals, backups, logs
+```
+
+## Developers
+
+Needs Windows, the .NET 10 SDK, Git for Windows and (for the add-in) SOLIDWORKS.
 
 ```powershell
 dotnet build SwVault.slnx
-dotnet test SwVault.slnx                  # offline: fake LFS server + local bare repos
+dotnet test SwVault.slnx
+.\scripts\dev-gitea.ps1 -Setup        # local Gitea for testing (gitea.exe in C:\SwVaultDev\gitea)
+.\scripts\dev-register-addin.ps1      # load your build in SOLIDWORKS (close it first)
 ```
-
-**Run against a real Gitea on this PC:**
-
-```powershell
-.\scripts\dev-gitea.ps1 -Setup            # gitea.exe must be in C:\SwVaultDev\gitea
-$env:SWVAULT_GITEA_TESTS = "1"; dotnet test tests\SwVault.IntegrationTests --filter GiteaSmokeTests
-```
-
-**Try the CLI as two users on one PC:**
-
-```powershell
-$sv = "$env:LOCALAPPDATA\SwVaultBuild\bin\SwVault.Cli\debug\swvault.exe"
-& $sv --profile alice vault init http://127.0.0.1:3000/fsae/vault.git --name FSAE --root C:\SWVaultDev\alice\FSAE --user alice --token <token>
-& $sv --profile bob vault add http://127.0.0.1:3000/fsae/vault.git --root C:\SWVaultDev\bob\FSAE --user bob --token <token>
-& $sv --profile alice checkin C:\SWVaultDev\alice\FSAE\Part.SLDPRT -m "first version"
-& $sv --profile bob get
-```
-
-**Install the add-in for development.** Close SOLIDWORKS first. The script shows one UAC prompt, on the first run only:
-
-```powershell
-.\scripts\dev-register-addin.ps1
-```
-
-**After a SOLIDWORKS upgrade**, confirm the API still behaves the way SwVault expects. SwApiCheck starts its own SOLIDWORKS, so close yours first:
-
-```powershell
-& "$env:LOCALAPPDATA\SwVaultBuild\bin\SwApiCheck\debug\SwApiCheck.exe"
-```
-
-Build output goes to `%LOCALAPPDATA%\SwVaultBuild` whenever the source is inside OneDrive, because OneDrive sync fights with build output.
