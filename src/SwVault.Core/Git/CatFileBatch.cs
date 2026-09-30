@@ -89,7 +89,7 @@ internal sealed class CatFileBatch : IDisposable
     {
         if (_process is { HasExited: false }) return _process;
         KillProcess();
-        var psi = new ProcessStartInfo("git")
+        var psi = new ProcessStartInfo(GitExe.Path)
         {
             UseShellExecute = false,
             CreateNoWindow = true,

@@ -300,6 +300,9 @@ public sealed partial class VaultSession
         return commit;
     }
 
+    private static bool IsSolidWorksDocument(string path) =>
+        Path.GetExtension(path).ToLowerInvariant() is ".sldprt" or ".sldasm" or ".slddrw";
+
     private void ApplyInfo(FileMeta meta, CheckInFileInfo info, IReadOnlyDictionary<string, CheckInItem> batch, HeadIndex head, List<string> warnings, bool allowMissing)
     {
         if (info.References != null)
@@ -313,7 +316,10 @@ public sealed partial class VaultSession
                 if (vp == null)
                 {
                     external.Add(abs);
-                    if (!Config.ExternalReferenceAllowList.Any(prefix => abs.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)))
+                    // Only SOLIDWORKS files are needed to open the document. Links such as the STEP file a
+                    // part was imported from (3D Interconnect) keep their geometry in the part itself.
+                    if (IsSolidWorksDocument(abs) &&
+                        !Config.ExternalReferenceAllowList.Any(prefix => abs.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)))
                         warnings.Add($"{abs} is outside the vault folder; teammates won't be able to open it.");
                     continue;
                 }

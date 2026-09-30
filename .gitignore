@@ -14,3 +14,7 @@ TestResults/
 
 # Local dev data
 *.log
+
+# Python bytecode (the team service)
+__pycache__/
+*.pyc

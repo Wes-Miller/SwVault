@@ -127,13 +127,19 @@ namespace SwVault.AddIn
         public async Task CheckInAsync(IReadOnlyList<string> paths)
         {
             if (paths.Count == 0) return;
+            // Parts inserted from outside the vault since the last check-in: copy them in first.
+            var vaults = await _agent.GetVaultsAsync();
+            foreach (var path in paths.Where(p => SwDocs.HasReferences(p) && _docs.FindOpen(p) != null))
+            {
+                var tree = WithReferences(path);
+                if (BringReferencesIntoVault(path, tree, vaults, null) == 0) continue;
+                _docs.SaveDirty(_docs.DirtyAmong(tree.Where(c => VaultOf(vaults, c) != null)));
+            }
+
             var candidates = new List<string>();
             foreach (var path in paths)
-            {
-                if (!candidates.Contains(path, StringComparer.OrdinalIgnoreCase)) candidates.Add(path);
-                foreach (var reference in _docs.References(path, traverse: true))
-                    if (!candidates.Contains(reference, StringComparer.OrdinalIgnoreCase)) candidates.Add(reference);
-            }
+                foreach (var file in WithReferences(path))
+                    if (!candidates.Contains(file, StringComparer.OrdinalIgnoreCase)) candidates.Add(file);
 
             var dirty = _docs.DirtyAmong(candidates);
             if (dirty.Count > 0)
@@ -171,7 +177,7 @@ namespace SwVault.AddIn
                 selected = dialog.SelectedPaths;
             }
             if (outside.Any(p => SwDocs.IsSolidWorksFile(p)) && !UiThread.Confirm(
-                    "Some referenced files are outside the vault folder, so teammates won't be able to open them:\n\n" +
+                    "These referenced files are still outside the vault folder (SwVault copies them in only while the assembly is open, and a copy can fail; see the log), so teammates won't be able to open them:\n\n" +
                     string.Join("\n", outside.Take(10)) + "\n\nCheck in anyway?"))
                 return;
 
@@ -183,6 +189,201 @@ namespace SwVault.AddIn
                 KeepCheckedOut = keep,
                 Files = selected.Select(FileInfoFor).ToArray(),
             }, "Checking in");
+        }
+
+        // ------------------------------------------------------------ add to vault
+
+        /// <summary>
+        /// One-click add: puts the document in a vault folder if it isn't in one yet (asking only
+        /// where), saves it, and checks it in together with any new files it references.
+        /// </summary>
+        public async Task AddToVaultAsync(IModelDoc2 doc)
+        {
+            if (doc == null) return;
+            var vaults = await _agent.GetVaultsAsync();
+            if (vaults.Length == 0)
+            {
+                UiThread.ShowInfo("Connect this PC to a vault first.");
+                await SetupVaultAsync();
+                vaults = await _agent.GetVaultsAsync();
+                if (vaults.Length == 0) return;
+            }
+
+            var path = SwDocs.PathOf(doc);
+            var originalFolder = string.IsNullOrEmpty(path) ? null : Path.GetDirectoryName(path);
+            if (string.IsNullOrEmpty(path) || VaultOf(vaults, path) == null)
+            {
+                var target = await ChooseVaultLocationAsync(doc, vaults, path);
+                if (target == null) return;
+                if (!_docs.SaveAs(doc, target))
+                    throw new AgentException(ErrorCodes.Internal, "Could not save " + Path.GetFileName(target) + " in the vault folder.");
+                path = target;
+            }
+
+            var candidates = WithReferences(path);
+            var brought = BringReferencesIntoVault(path, candidates, vaults, originalFolder);
+            if (brought > 0)
+            {
+                _docs.SaveDirty(_docs.DirtyAmong(candidates.Where(c => VaultOf(vaults, c) != null)));
+                candidates = WithReferences(path);
+            }
+
+            var failed = _docs.SaveDirty(_docs.DirtyAmong(candidates));
+            if (failed.Count > 0)
+            {
+                UiThread.ShowError("These files could not be saved:\n\n" + string.Join("\n", failed.Select(Path.GetFileName)));
+                return;
+            }
+
+            var statuses = await _agent.GetStatusAsync(candidates.ToArray());
+            var own = statuses.FirstOrDefault(s => string.Equals(s.LocalPath, path, StringComparison.OrdinalIgnoreCase));
+            if (own == null) throw new AgentException(ErrorCodes.BadRequest, Path.GetFileName(path) + " is not in a vault folder.");
+            if (own.LocalState == LocalState.Ignored)
+            {
+                UiThread.ShowInfo(Path.GetFileName(path) + " matches the vault's ignore list, so it can't be added.");
+                return;
+            }
+            if (own.LocalState != LocalState.LocalOnly)
+            {
+                UiThread.ShowInfo(Path.GetFileName(path) + " is already in the vault." +
+                                  (own.LockState == LockState.MineHere ? " Use Check In to upload your changes." : ""));
+                return;
+            }
+
+            var toAdd = statuses.Where(s => s.LocalState == LocalState.LocalOnly).Select(s => s.LocalPath).ToList();
+            var outside = candidates.Where(c => !statuses.Any(s => string.Equals(s.LocalPath, c, StringComparison.OrdinalIgnoreCase))).ToList();
+            if (outside.Any(p => SwDocs.IsSolidWorksFile(p)) && !UiThread.Confirm(
+                    "These referenced files are still outside the vault folder (SwVault copies them in only while the assembly is open, and a copy can fail; see the log), so teammates won't be able to open them:\n\n" +
+                    string.Join("\n", outside.Take(10)) + "\n\nAdd to the vault anyway?"))
+                return;
+
+            var name = Path.GetFileName(path);
+            await RunJobAsync(new JobRequest
+            {
+                Kind = JobKind.CheckIn,
+                Paths = toAdd.ToArray(),
+                Comment = toAdd.Count == 1 ? "Added " + name : "Added " + name + " and " + (toAdd.Count - 1) + " new referenced file(s)",
+                Files = toAdd.Select(FileInfoFor).ToArray(),
+            }, "Adding to vault");
+
+            ((IFrame)_docs.App.Frame()).SetStatusBarText("SwVault: added " + name + (toAdd.Count > 1 ? " and " + (toAdd.Count - 1) + " referenced file(s)" : "") + " to the vault. Check it out to edit it again.");
+        }
+
+        /// <summary>The file plus everything it references, as stored on disk.</summary>
+        private List<string> WithReferences(string path)
+        {
+            var list = new List<string> { path };
+            foreach (var reference in _docs.References(path, traverse: true))
+                if (!list.Contains(reference, StringComparer.OrdinalIgnoreCase)) list.Add(reference);
+            return list;
+        }
+
+        /// <summary>
+        /// Saves the SOLIDWORKS files a document uses from outside the vault into the vault, next to the
+        /// document (keeping their subfolders when they were under <paramref name="originalFolder"/>).
+        /// It's a Save As in this session, so the open assemblies and drawings then point at the copies;
+        /// the caller saves them. Returns how many files were brought in.
+        /// </summary>
+        private int BringReferencesIntoVault(string path, IReadOnlyList<string> candidates, VaultInfo[] vaults, string originalFolder)
+        {
+            var outside = candidates.Skip(1).Where(c => SwDocs.IsSolidWorksFile(c) && VaultOf(vaults, c) == null && File.Exists(c)).ToList();
+            if (outside.Count == 0) return 0;
+
+            var folder = Path.GetDirectoryName(path);
+            // Parts first, then sub-assemblies deepest first, so each one is saved already pointing at the copies it uses.
+            var ordered = outside.Select((p, i) => new { Path = p, Index = i })
+                .OrderBy(x => SwDocs.TypeFromExtension(x.Path) == (int)swDocumentTypes_e.swDocPART ? 0 : 1)
+                .ThenByDescending(x => x.Index)
+                .Select(x => x.Path)
+                .ToList();
+            var taken = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var count = 0;
+            var frame = (IFrame)_docs.App.Frame();
+            foreach (var source in ordered)
+            {
+                var target = FreeName(TargetFor(source, folder, originalFolder), taken);
+                taken.Add(target);
+                frame.SetStatusBarText("SwVault: copying " + Path.GetFileName(source) + " into the vault...");
+                var doc = _docs.FindOpen(source);
+                var openedHere = doc == null;
+                if (openedHere) doc = _docs.Open(source, silent: true);
+                if (doc == null || !_docs.SaveAs(doc, target))
+                {
+                    Log.Warn("Couldn't bring " + source + " into the vault as " + target);
+                    continue;
+                }
+                Log.Info("Brought " + source + " into the vault as " + target);
+                count++;
+                if (openedHere && !ReferenceEquals(doc, _docs.ActiveDoc)) _docs.Close(doc);
+            }
+            frame.SetStatusBarText("SwVault: copied " + count + " referenced file(s) into the vault.");
+            return count;
+        }
+
+        private static string TargetFor(string source, string folder, string originalFolder)
+        {
+            if (!string.IsNullOrEmpty(originalFolder) &&
+                source.StartsWith(originalFolder.TrimEnd('\\') + "\\", StringComparison.OrdinalIgnoreCase))
+                return Path.Combine(folder, source.Substring(originalFolder.TrimEnd('\\').Length + 1));
+            return Path.Combine(folder, Path.GetFileName(source));
+        }
+
+        /// <summary>The target, or "Name (2).SLDPRT" etc. when a different file already has that name.</summary>
+        private static string FreeName(string target, ICollection<string> taken)
+        {
+            var candidate = target;
+            for (var n = 2; File.Exists(candidate) || taken.Contains(candidate); n++)
+                candidate = Path.Combine(Path.GetDirectoryName(target), Path.GetFileNameWithoutExtension(target) + " (" + n + ")" + Path.GetExtension(target));
+            return candidate;
+        }
+
+        private static VaultInfo VaultOf(IEnumerable<VaultInfo> vaults, string path) =>
+            vaults.FirstOrDefault(v => !string.IsNullOrEmpty(v.LocalRoot)
+                && path.StartsWith(v.LocalRoot.TrimEnd('\\') + "\\", StringComparison.OrdinalIgnoreCase));
+
+        /// <summary>Asks where in a vault folder to save a document that isn't in one yet.</summary>
+        private async Task<string> ChooseVaultLocationAsync(IModelDoc2 doc, VaultInfo[] vaults, string currentPath)
+        {
+            var extension = SwDocs.ExtensionFor(doc);
+            var fileName = string.IsNullOrEmpty(currentPath) ? Path.GetFileNameWithoutExtension(doc.GetTitle() ?? "") + extension : Path.GetFileName(currentPath);
+            var folder = vaults[0].LocalRoot;
+            while (true)
+            {
+                string target;
+                using (var dialog = new SaveFileDialog
+                {
+                    Title = "Add to Vault - choose a folder inside your vault",
+                    InitialDirectory = folder,
+                    FileName = fileName,
+                    Filter = "SOLIDWORKS file (*" + extension + ")|*" + extension,
+                    DefaultExt = extension,
+                    AddExtension = true,
+                    OverwritePrompt = false,
+                })
+                {
+                    if (dialog.ShowDialog(UiThread.Owner) != DialogResult.OK) return null;
+                    target = dialog.FileName;
+                }
+                folder = Path.GetDirectoryName(target);
+                fileName = Path.GetFileName(target);
+
+                if (VaultOf(vaults, target) == null)
+                {
+                    UiThread.ShowError("Choose a folder inside your vault: " + string.Join(", ", vaults.Select(v => v.LocalRoot)));
+                    continue;
+                }
+                if (File.Exists(target))
+                {
+                    var existing = (await _agent.GetStatusAsync(target)).FirstOrDefault();
+                    if (existing != null && existing.LocalState != LocalState.LocalOnly)
+                    {
+                        UiThread.ShowError(fileName + " is already in the vault. Choose a different name.");
+                        continue;
+                    }
+                    if (!UiThread.Confirm(fileName + " already exists in that folder. Replace it?")) continue;
+                }
+                return target;
+            }
         }
 
         /// <summary>What the vault stores about a file: references, custom properties, SOLIDWORKS version.</summary>
@@ -419,6 +620,13 @@ namespace SwVault.AddIn
         public async Task SetupVaultAsync()
         {
             var existing = await _agent.GetVaultsAsync();
+            var team = existing.Length == 0 ? await _agent.GetTeamAsync() : null;
+            if (team != null)
+            {
+                // Team install: the agent's sign-in window (account or invite code) handles it.
+                await _agent.ShowAgentWindowAsync("signIn");
+                return;
+            }
             using (var dialog = new VaultSetupDialog(existing))
             {
                 if (dialog.ShowDialog(UiThread.Owner) != DialogResult.OK) return;
@@ -435,5 +643,8 @@ namespace SwVault.AddIn
             }
             Changed?.Invoke(new string[0]);
         }
+
+        /// <summary>Vault admins: the agent's Invite People window (makes a link + code to send).</summary>
+        public Task InvitePeopleAsync() => _agent.ShowAgentWindowAsync("invite");
     }
 }

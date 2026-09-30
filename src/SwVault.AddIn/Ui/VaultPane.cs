@@ -28,6 +28,7 @@ namespace SwVault.AddIn.Ui
         private readonly TreeView _folders = new TreeView { Dock = DockStyle.Fill, HideSelection = false };
         private readonly ListView _files = new ListView { Dock = DockStyle.Fill, View = View.Details, FullRowSelect = true, HideSelection = false };
         private readonly Label _active = new Label { Dock = DockStyle.Bottom, Height = 48, Padding = new Padding(4), AutoEllipsis = true, BorderStyle = BorderStyle.FixedSingle };
+        private readonly Button _add = new Button { Text = "Add to Vault", Dock = DockStyle.Bottom, Height = 32, Visible = false, BackColor = Color.FromArgb(0, 150, 136), ForeColor = Color.White, FlatStyle = FlatStyle.Flat };
         private readonly Timer _debounce = new Timer { Interval = 600 };
         private readonly ImageList _images = Icons.StateImages();
         private VaultInfo[] _vaultList = new VaultInfo[0];
@@ -68,6 +69,7 @@ namespace SwVault.AddIn.Ui
             split.Panel2.Controls.Add(_files);
 
             Controls.Add(split);
+            Controls.Add(_add);
             Controls.Add(_active);
             Controls.Add(_connection);
             Controls.Add(top);
@@ -83,12 +85,32 @@ namespace SwVault.AddIn.Ui
             _search.KeyDown += (s, e) => { if (e.KeyCode == Keys.Enter) { e.SuppressKeyPress = true; Safe(LoadFilesAsync); } };
             _refresh.Click += (s, e) => Safe(() => RefreshAllAsync(sync: true));
             _connect.Click += (s, e) => Run("Connect vault", () => _commands.SetupVaultAsync());
+            _add.Click += (s, e) => AddToVaultRequested?.Invoke();
             _debounce.Tick += (s, e) => { _debounce.Stop(); Safe(async () => { await LoadFilesAsync(); await ShowActiveDocAsync(_activePath); }); };
 
             _agent.StatusChanged += n => { if (n.VaultId == null || n.VaultId == CurrentVault?.Id) { _debounce.Stop(); _debounce.Start(); } };
             _agent.ConnectionChanged += () => UpdateConnectionLabel();
             _commands.Changed += _ => { _debounce.Stop(); _debounce.Start(); };
         }
+
+        /// <summary>"Front Suspension (2027 Car) - RE: bob, carol", or null when the file isn't in a subsystem.</summary>
+        private async Task<string> SubsystemTextAsync(string path)
+        {
+            try
+            {
+                var s = await _agent.SubsystemForAsync(path);
+                if (s == null) return null;
+                var engineers = s.Engineers != null && s.Engineers.Length > 0 ? string.Join(", ", s.Engineers) : "none yet";
+                return s.Name + " (" + s.Car + ") - RE: " + engineers;
+            }
+            catch (AgentException)
+            {
+                return null; // older agent or no team service: just leave it out
+            }
+        }
+
+        /// <summary>The Add to Vault button was clicked; the add-in adds the active document.</summary>
+        public event Action AddToVaultRequested;
 
         private VaultInfo CurrentVault => _vaults.SelectedIndex >= 0 && _vaults.SelectedIndex < _vaultList.Length ? _vaultList[_vaults.SelectedIndex] : null;
 
@@ -289,24 +311,36 @@ namespace SwVault.AddIn.Ui
         public async Task ShowActiveDocAsync(string path)
         {
             _activePath = path;
-            if (string.IsNullOrEmpty(path))
+            if (path == null)
             {
                 _active.Text = "No document open.";
                 _active.BackColor = SystemColors.Control;
+                _add.Visible = false;
+                return;
+            }
+            if (path.Length == 0)
+            {
+                _active.Text = "This document hasn't been saved. Add to Vault saves it in your vault folder and checks it in.";
+                _active.BackColor = SystemColors.Control;
+                _add.Visible = true;
                 return;
             }
             try
             {
                 var status = (await _agent.GetStatusAsync(path)).FirstOrDefault();
                 if (path != _activePath) return;
+                _add.Visible = status == null || status.LocalState == LocalState.LocalOnly;
                 if (status == null)
                 {
                     _active.Text = Path.GetFileName(path) + ": not in a vault folder.";
                     _active.BackColor = SystemColors.Control;
                     return;
                 }
+                var subsystem = await SubsystemTextAsync(path);
+                if (path != _activePath) return;
                 _active.Text = Path.GetFileName(path) + "  " + (status.ServerVersion > 0 ? "v" + status.ServerVersion + "  " : "") +
-                               (status.State ?? "") + (string.IsNullOrEmpty(status.Revision) ? "" : " rev " + status.Revision) + "\n" + VaultDialog.Describe(status);
+                               (status.State ?? "") + (string.IsNullOrEmpty(status.Revision) ? "" : " rev " + status.Revision) + "\n" + VaultDialog.Describe(status) +
+                               (subsystem == null ? "" : "\n" + subsystem);
                 _active.BackColor = status.LocalState == LocalState.Outdated || status.LocalState == LocalState.Conflict ? Color.FromArgb(255, 243, 205)
                     : status.LockState == LockState.MineHere ? Color.FromArgb(217, 234, 250)
                     : status.LockState == LockState.Other ? Color.FromArgb(250, 219, 216)

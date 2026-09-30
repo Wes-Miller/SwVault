@@ -21,8 +21,13 @@ internal sealed class SyncLoop : IDisposable
     private readonly SemaphoreSlim _wake = new(0);
     private Task? _loop;
 
-    public SyncLoop(VaultManager vaults, Action<string, object> broadcast, Action<string, string> toast, FileLog log)
+    private readonly Func<VaultSession, IReadOnlyList<Core.Client.Subsystem>> _engineerOf;
+
+    /// <param name="engineerOf">Subsystems of a vault where I'm a responsible engineer (their changes get their own toast).</param>
+    public SyncLoop(VaultManager vaults, Action<string, object> broadcast, Action<string, string> toast, FileLog log,
+        Func<VaultSession, IReadOnlyList<Core.Client.Subsystem>>? engineerOf = null)
     {
+        _engineerOf = engineerOf ?? (_ => Array.Empty<Core.Client.Subsystem>());
         _vaults = vaults;
         _broadcast = broadcast;
         _toast = toast;
@@ -120,6 +125,35 @@ internal sealed class SyncLoop : IDisposable
             _toast("New versions in " + session.Config.Name, Summarize(updated) + "\nUse Get Latest to update your copies.");
         if (toReview.Count > 0)
             _toast("Ready for your review", Summarize(toReview));
+        NotifyEngineer(session, result, me);
+    }
+
+    /// <summary>Responsible engineers hear about everything others add, check in or release in their subsystems.</summary>
+    private void NotifyEngineer(VaultSession session, SyncResult result, string? me)
+    {
+        var mine = _engineerOf(session);
+        if (mine.Count == 0) return;
+        foreach (var group in result.ChangedPaths
+                     .Select(path => (Path: path, Head: session.Head.Get(path), Subsystem: mine.Where(s => s.Contains(path)).OrderByDescending(s => s.Folder.Length).FirstOrDefault()))
+                     .Where(x => x.Head?.Meta != null && x.Subsystem != null)
+                     .GroupBy(x => x.Subsystem!.Id))
+        {
+            var lines = new List<string>();
+            foreach (var (path, head, _) in group)
+            {
+                var meta = head!.Meta!;
+                var released = string.Equals(meta.State, "Released", StringComparison.OrdinalIgnoreCase);
+                var actor = released ? meta.RevisionHistory?.LastOrDefault()?.By ?? meta.CheckedInBy : meta.CheckedInBy;
+                if (string.Equals(actor, me, StringComparison.OrdinalIgnoreCase)) continue;
+                var name = PathRules.GetFileName(path);
+                lines.Add(released ? $"{actor} released {name} rev {meta.Revision}"
+                    : head.Version == 1 ? $"{actor} added {name}"
+                    : $"{actor} checked in {name} v{head.Version}");
+            }
+            if (lines.Count == 0) continue;
+            var subsystem = group.First().Subsystem!;
+            _toast($"{subsystem.CarName} / {subsystem.Name} (you're RE)", Summarize(lines));
+        }
     }
 
     private static string Summarize(List<string> items) =>

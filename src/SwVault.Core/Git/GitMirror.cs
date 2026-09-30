@@ -246,7 +246,7 @@ public sealed class GitMirror : IDisposable
         foreach (var (k, v) in auth) env[k] = v;
         var all = new List<string> { "--git-dir=" + GitDir };
         all.AddRange(args);
-        return await ProcessRunner.RunAsync("git", all, environment: env, timeout: TimeSpan.FromMinutes(10), ct: ct).ConfigureAwait(false);
+        return await ProcessRunner.RunAsync(GitExe.Path, all, environment: env, timeout: TimeSpan.FromMinutes(10), ct: ct).ConfigureAwait(false);
     }
 
     private async Task<ProcessResult> RunLocalAsync(
@@ -262,7 +262,7 @@ public sealed class GitMirror : IDisposable
         var all = new List<string>();
         if (gitDirArg) all.Add("--git-dir=" + GitDir);
         all.AddRange(args);
-        var result = await ProcessRunner.RunAsync("git", all, environment: env, stdin: stdin, timeout: TimeSpan.FromMinutes(5), ct: ct).ConfigureAwait(false);
+        var result = await ProcessRunner.RunAsync(GitExe.Path, all, environment: env, stdin: stdin, timeout: TimeSpan.FromMinutes(5), ct: ct).ConfigureAwait(false);
         if (check && result.ExitCode != 0)
             throw new GitException($"git {string.Join(' ', args.Take(2))} failed: {FirstMeaningfulLine(result.StdErr)}");
         return result;

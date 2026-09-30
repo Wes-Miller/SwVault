@@ -1,4 +1,5 @@
 using System.Text;
+using SwVault.Core.Client;
 using SwVault.Core.Index;
 using SwVault.Core.Util;
 using SwVault.Core.Vault;
@@ -207,4 +208,161 @@ public class WireJsonTests
         Assert.True(parsed.IsRequest);
         Assert.Equal(json, parsed.Payload);
     }
+}
+
+public class TeamConfigTests
+{
+    /// <summary>Exactly what server/linux/lib.sh (write_team_json) produces.</summary>
+    [Fact]
+    public void ReadsTeamJsonFromServerSetup()
+    {
+        const string json = """
+            {
+              "name": "FSAE",
+              "vaultUrl": "https://swvault.tail1234.ts.net/fsae/cad.git",
+              "localRoot": "C:\\SWVault\\FSAE",
+              "admin": "wes",
+              "downloadAllOnJoin": true,
+              "solidworksVersion": "2025"
+            }
+            """;
+        var team = Json.Deserialize<TeamConfig>(json)!;
+        Assert.Equal("FSAE", team.Name);
+        Assert.Equal("https://swvault.tail1234.ts.net/fsae/cad.git", team.VaultUrl);
+        Assert.Equal(@"C:\SWVault\FSAE", team.LocalRoot);
+        Assert.Equal("wes", team.Admin);
+        Assert.Equal("2025", team.SolidworksVersion);
+        Assert.True(team.DownloadAllOnJoin);
+    }
+}
+
+public class TeamInviteTests
+{
+    [Theory]
+    [InlineData("K7QM-R3XT-9BWE", "K7QM-R3XT-9BWE")]
+    [InlineData("k7qm r3xt 9bwe", "K7QM-R3XT-9BWE")]
+    [InlineData("k7qmr3xt9bwe", "K7QM-R3XT-9BWE")]
+    [InlineData(@"C:\Users\a\Downloads\SwVault-FSAE-invite-K7QM-R3XT-9BWE", "K7QM-R3XT-9BWE")]
+    [InlineData("K7QM-R3XT", null)]
+    [InlineData("O0I1-R3XT-9BWE", null)] // look-alike characters are never in codes
+    [InlineData("", null)]
+    public void NormalizeCode(string input, string? expected) => Assert.Equal(expected, TeamInvites.NormalizeCode(input));
+
+    [Fact]
+    public void ServiceUrlSitsNextToTheServer()
+    {
+        Assert.Equal("https://swvault.tail1234.ts.net/swvault-invites/", TeamInvites.ServiceUrl("https://swvault.tail1234.ts.net/fsae/cad.git").ToString());
+        Assert.Equal("https://swvault.tail1234.ts.net/swvault-invites/download?invite=K7QM-R3XT-9BWE",
+            TeamInvites.DownloadUrl("https://swvault.tail1234.ts.net/fsae/cad.git", "K7QM-R3XT-9BWE").ToString());
+    }
+}
+
+public class ReviewParsingTests
+{
+    private static System.Text.Json.JsonElement Issue(string body, string state, params string[] labels) =>
+        System.Text.Json.JsonDocument.Parse(System.Text.Json.JsonSerializer.Serialize(new
+        {
+            number = 7,
+            body,
+            state,
+            html_url = "https://x/fsae/cad/issues/7",
+            created_at = "2026-09-30T10:00:00Z",
+            updated_at = "2026-09-30T11:00:00Z",
+            user = new { login = "eli" },
+            assignees = new[] { new { login = "dana" } },
+            labels = labels.Select(l => new { name = l }).ToArray(),
+        })).RootElement;
+
+    private const string Body = "<!-- swvault-review {\"kind\":\"simulation\",\"path\":\"Chassis/Frame.SLDPRT\",\"version\":3} -->\n**Simulation review** requested by @eli\n\n> check FOS\n> at the tabs\n";
+
+    [Fact]
+    public void ReadsTheRequest()
+    {
+        var r = Reviews.Parse(Issue(Body, "open", "review", "review: simulation"))!;
+        Assert.Equal(ReviewKind.Simulation, r.Kind);
+        Assert.Equal("Chassis/Frame.SLDPRT", r.Path);
+        Assert.Equal(3, r.Version);
+        Assert.Equal("eli", r.Requester);
+        Assert.Equal("dana", r.Lead);
+        Assert.Equal("check FOS\nat the tabs", r.Message);
+        Assert.Equal(ReviewStatus.Waiting, r.Status);
+    }
+
+    [Theory]
+    [InlineData("open", "review: changes requested", ReviewStatus.ChangesRequested)]
+    [InlineData("closed", "review: approved", ReviewStatus.Approved)]
+    [InlineData("closed", "review: cancelled", ReviewStatus.Cancelled)]
+    [InlineData("closed", "review", ReviewStatus.Cancelled)] // closed on the web without a decision
+    public void StatusComesFromLabels(string state, string label, ReviewStatus expected) =>
+        Assert.Equal(expected, Reviews.Parse(Issue(Body, state, "review", label))!.Status);
+
+    [Fact]
+    public void IgnoresOtherIssues() => Assert.Null(Reviews.Parse(Issue("Just a normal issue", "open")));
+
+    [Fact]
+    public void ReadsTheCcLine()
+    {
+        var body = Body.Replace("\n\n> check", "\n\ncc @bob @carol.k (responsible engineers of 2027 Car / Chassis)\n\n> check");
+        var r = Reviews.Parse(Issue(body, "open", "review"))!;
+        Assert.Equal(new[] { "bob", "carol.k" }, r.CcLogins);
+        Assert.Equal("check FOS\nat the tabs", r.Message);
+        Assert.Empty(Reviews.Parse(Issue(Body, "open", "review"))!.CcLogins);
+    }
+}
+
+public class SubsystemTests
+{
+    private static readonly IReadOnlyList<Car> Cars = TeamInvites.ParseCars(System.Text.Json.JsonDocument.Parse("""
+        {"cars":[{"id":"c-1","name":"2027 Car","folder":"FS27","subsystems":[
+          {"id":"s-1","name":"Suspension","folder":"FS27/Suspension","engineers":[
+            {"login":"bob","status":"approved"},{"login":"carol","status":"pending"}]},
+          {"id":"s-2","name":"Front Uprights","folder":"FS27/Suspension/Uprights","engineers":[{"login":"dana","status":"approved"}]},
+          {"id":"s-3","name":"Chassis","folder":"FS27/Chassis","engineers":[]}]}]}
+        """).RootElement);
+
+    [Fact]
+    public void ParsesCarsAndEngineers()
+    {
+        var suspension = Cars[0].Subsystems[0];
+        Assert.Equal("2027 Car", suspension.CarName);
+        Assert.Equal(new[] { "bob" }, suspension.ApprovedEngineers);
+        Assert.True(suspension.IsEngineer("BOB"));
+        Assert.False(suspension.IsEngineer("carol"));
+        Assert.True(suspension.HasPendingRequest("carol"));
+    }
+
+    [Theory]
+    [InlineData("FS27/Suspension/Rocker.SLDPRT", "s-1")]
+    [InlineData("fs27/suspension/uprights/FrontUpright.SLDPRT", "s-2")] // the deepest folder wins, case-insensitively
+    [InlineData("FS27/Chassis/Frame.SLDASM", "s-3")]
+    [InlineData("FS27/SuspensionOld/Rocker.SLDPRT", null)] // a folder name prefix isn't a match
+    [InlineData("FS27/Top.SLDASM", null)]
+    public void FindsTheSubsystemOfAFile(string path, string? expected) =>
+        Assert.Equal(expected, TeamInvites.SubsystemFor(Cars, path)?.Id);
+}
+
+public class UpdateTests
+{
+    private static InstallerRelease? Parse(string json) =>
+        TeamInvites.ParseRelease(System.Text.Json.JsonDocument.Parse(json).RootElement);
+
+    [Fact]
+    public void ParsesThePublishedRelease()
+    {
+        var r = Parse("""{"version":"0.3.0","sha256":"ABC123","size":94371840,"published":"2026-09-30T08:00:00+00:00","required":true,"notes":"Adds part numbering"}""")!;
+        Assert.Equal(new Version(0, 3, 0), r.Version);
+        Assert.Equal("abc123", r.Sha256);
+        Assert.True(r.Required);
+        Assert.Equal("Adds part numbering", r.Notes);
+        Assert.Null(Parse("""{"version":null,"sha256":"abc"}"""));
+        Assert.False(Parse("""{"version":"1.0.0","sha256":"abc","required":false,"notes":""}""")!.Required);
+    }
+
+    [Theory]
+    [InlineData("0.3.0", "0.2.2.0", true)]
+    [InlineData("0.2.2", "0.2.2.0", false)] // the agent's assembly version has a 4th part
+    [InlineData("0.2.10", "0.2.9.0", true)] // numeric, not text, comparison
+    [InlineData("0.2.1", "0.2.2.0", false)]
+    public void ComparesVersions(string published, string current, bool newer) =>
+        Assert.Equal(newer, Parse($$"""{"version":"{{published}}","sha256":"abc"}""")!.IsNewerThan(Version.Parse(current)));
 }

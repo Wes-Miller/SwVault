@@ -166,6 +166,17 @@ namespace SwVault.AddIn
 
         public Task<VaultInfo[]> GetVaultsAsync() => CallAsync<object, VaultInfo[]>(Methods.VaultsList, null);
 
+        /// <summary>The team vault this install was packaged for, or null.</summary>
+        public Task<TeamInfo> GetTeamAsync() => CallAsync<object, TeamInfo>(Methods.TeamGet, null);
+
+        /// <summary>The car subsystem a local file is in (with its responsible engineers), or null.</summary>
+        public Task<SubsystemInfo> SubsystemForAsync(string path) =>
+            CallAsync<PathsRequest, SubsystemInfo>(Methods.SubsystemFor, new PathsRequest { Paths = new[] { path } });
+
+        /// <summary>Opens one of the agent's windows ("signIn", "invite", "subsystems", ...) in front of SOLIDWORKS.</summary>
+        public Task ShowAgentWindowAsync(string what, string path = null) =>
+            CallAsync<UiShowRequest, object>(Methods.UiShow, new UiShowRequest { What = what, Path = path });
+
         public Task<VaultInfo> AddVaultAsync(VaultAddRequest request) => CallAsync<VaultAddRequest, VaultInfo>(Methods.VaultAdd, request);
 
         public Task<VaultInfo> SyncVaultAsync(string vaultId) => CallAsync<VaultRequest, VaultInfo>(Methods.VaultSync, new VaultRequest { VaultId = vaultId });

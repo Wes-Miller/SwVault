@@ -154,7 +154,7 @@ public sealed class GitCredentialProvider : ICredentialProvider
             ["GIT_TERMINAL_PROMPT"] = interactive ? "1" : "0",
             ["GCM_INTERACTIVE"] = interactive ? "auto" : "never",
         };
-        var result = await ProcessRunner.RunAsync("git", new[] { "credential", "fill" }, environment: env,
+        var result = await ProcessRunner.RunAsync(GitExe.Path, new[] { "credential", "fill" }, environment: env,
             stdin: Encoding.UTF8.GetBytes(input), timeout: interactive ? TimeSpan.FromMinutes(5) : TimeSpan.FromSeconds(30), ct: ct).ConfigureAwait(false);
         if (result.ExitCode != 0) return null;
         var values = Parse(result.StdOutText);
@@ -166,7 +166,7 @@ public sealed class GitCredentialProvider : ICredentialProvider
     public async Task RejectAsync(Uri server, Credential credential, CancellationToken ct)
     {
         var input = $"protocol={server.Scheme}\nhost={server.Authority}\nusername={credential.UserName}\npassword={credential.Secret}\n\n";
-        await ProcessRunner.RunAsync("git", new[] { "credential", "reject" }, stdin: Encoding.UTF8.GetBytes(input),
+        await ProcessRunner.RunAsync(GitExe.Path, new[] { "credential", "reject" }, stdin: Encoding.UTF8.GetBytes(input),
             timeout: TimeSpan.FromSeconds(30), ct: ct).ConfigureAwait(false);
     }
 

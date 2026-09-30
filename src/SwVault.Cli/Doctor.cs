@@ -20,10 +20,10 @@ internal static class Doctor
         Console.WriteLine("SwVault doctor");
         Console.WriteLine($"  profile: {manager.Profile.Name} ({manager.Profile.BaseDir})");
 
-        var git = await ProcessRunner.RunAsync("git", new[] { "--version" }, ct: ct);
+        var git = await ProcessRunner.RunAsync(GitExe.Path, new[] { "--version" }, ct: ct);
         var match = Regex.Match(git.StdOutText, @"(\d+)\.(\d+)");
         var gitOk = git.ExitCode == 0 && match.Success && (int.Parse(match.Groups[1].Value) > 2 || int.Parse(match.Groups[2].Value) >= 31);
-        Report(gitOk, "Git for Windows 2.31 or newer", git.ExitCode == 0 ? git.StdOutText.Trim() : "git not found on PATH - install Git for Windows");
+        Report(gitOk, "Git 2.31 or newer", git.ExitCode == 0 ? git.StdOutText.Trim() + (GitExe.IsBundled ? " (bundled)" : "") : "git not found - reinstall SwVault, or install Git for Windows");
 
         var sw = SolidworksVersion();
         Report(sw != null, "SOLIDWORKS installed", sw ?? "not found (only the add-in needs it)");

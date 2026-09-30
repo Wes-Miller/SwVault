@@ -55,6 +55,7 @@ namespace SwVault.AddIn
 
         private static readonly CommandSpec[] Commands =
         {
+            new CommandSpec { Name = "Add to Vault", Hint = "Put this file in the vault in one step: saves it into your vault folder if needed and checks it in", Glyph = 0xE710, Color = Color.FromArgb(0, 150, 136), Callback = nameof(OnAddToVault), Enable = nameof(EnableWithDocument) },
             new CommandSpec { Name = "Check Out", Hint = "Lock the file(s) for editing so nobody else changes them", Glyph = 0xE785, Color = Color.FromArgb(0, 102, 204), Callback = nameof(OnCheckOut), Enable = nameof(EnableWithDocument) },
             new CommandSpec { Name = "Check In", Hint = "Upload your changes as a new version and release the lock", Glyph = 0xE898, Color = Color.FromArgb(46, 139, 87), Callback = nameof(OnCheckIn), Enable = nameof(EnableWithDocument) },
             new CommandSpec { Name = "Undo Check Out", Hint = "Discard your changes and release the lock", Glyph = 0xE7A7, Color = Color.FromArgb(160, 80, 60), Callback = nameof(OnUndoCheckOut), Enable = nameof(EnableWithDocument) },
@@ -62,8 +63,12 @@ namespace SwVault.AddIn
             new CommandSpec { Name = "History", Hint = "Versions, comments, get an older version or roll back", Glyph = 0xE81C, Color = Color.FromArgb(90, 90, 160), Callback = nameof(OnHistory), Enable = nameof(EnableWithDocument) },
             new CommandSpec { Name = "Where Used", Hint = "Assemblies and drawings that use this file", Glyph = 0xE71B, Color = Color.FromArgb(90, 120, 140), Callback = nameof(OnWhereUsed), Enable = nameof(EnableWithDocument) },
             new CommandSpec { Name = "Change State", Hint = "Submit for review, approve/release, change request", Glyph = 0xE7C1, Color = Color.FromArgb(128, 64, 160), Callback = nameof(OnChangeState), Enable = nameof(EnableWithDocument) },
+            new CommandSpec { Name = "Request Review", Hint = "Ask a subteam lead for a design, simulation or drawing review of this file", Glyph = 0xE8F2, Color = Color.FromArgb(180, 90, 0), Callback = nameof(OnRequestReview), Enable = nameof(EnableWithDocument) },
+            new CommandSpec { Name = "Reviews", Hint = "Review requests for you (as a lead) and the ones you sent", Glyph = 0xE8BD, Color = Color.FromArgb(180, 90, 0), Callback = nameof(OnReviews), Enable = nameof(EnableAlways) },
+            new CommandSpec { Name = "Subsystems", Hint = "Cars and subsystems, their responsible engineers; add a subsystem or become its RE", Glyph = 0xE8FD, Color = Color.FromArgb(0, 102, 204), Callback = nameof(OnSubsystems), Enable = nameof(EnableAlways) },
             new CommandSpec { Name = "Import Folder", Hint = "Copy an existing folder of SOLIDWORKS files into the vault, fixing references", Glyph = 0xE8B5, Color = Color.FromArgb(70, 110, 70), Callback = nameof(OnImport), Enable = nameof(EnableAlways) },
             new CommandSpec { Name = "Refresh", Hint = "Check the server for new versions and check-outs", Glyph = 0xE72C, Color = Color.FromArgb(100, 100, 100), Callback = nameof(OnRefresh), Enable = nameof(EnableAlways) },
+            new CommandSpec { Name = "Invite People", Hint = "Vault admins: make an invite link to send to new team members", Glyph = 0xE8FA, Color = Color.FromArgb(0, 120, 212), Callback = nameof(OnInvite), Enable = nameof(EnableAlways) },
             new CommandSpec { Name = "Vaults", Hint = "Connect this PC to a vault", Glyph = 0xE713, Color = Color.FromArgb(100, 100, 100), Callback = nameof(OnSettings), Enable = nameof(EnableAlways) },
         };
 
@@ -235,6 +240,7 @@ namespace SwVault.AddIn
         {
             _taskPaneView = _sw.CreateTaskpaneView2(Icons.TaskPaneIcon(), "SwVault");
             _pane = new VaultPane(_agent, _commands);
+            _pane.AddToVaultRequested += OnAddToVault;
             _pane.CreateControl();
             _taskPaneView.DisplayWindowFromHandlex64(_pane.Handle.ToInt64());
         }
@@ -262,8 +268,15 @@ namespace SwVault.AddIn
 
         private void RefreshActive()
         {
-            var path = SwDocs.PathOf(_docs?.ActiveDoc);
+            var path = ActivePath();
             UiThread.Post(() => UiThread.Run("Status", () => _pane.ShowActiveDocAsync(path)));
+        }
+
+        /// <summary>Path of the active document: null when none is open, "" when it has never been saved.</summary>
+        private string ActivePath()
+        {
+            var doc = _docs?.ActiveDoc;
+            return doc == null ? null : SwDocs.PathOf(doc);
         }
 
         /// <summary>After opening a vault file, point out when a newer version exists.</summary>
@@ -278,7 +291,7 @@ namespace SwVault.AddIn
                 if (status == null) return;
                 if (status.LocalState == LocalState.Outdated)
                     ((IFrame)_sw.Frame()).SetStatusBarText("SwVault: a newer version of " + System.IO.Path.GetFileName(fileName) + " exists (v" + status.ServerVersion + ") - use Get Latest.");
-                await _pane.ShowActiveDocAsync(SwDocs.PathOf(_docs.ActiveDoc));
+                await _pane.ShowActiveDocAsync(ActivePath());
             });
         }
 
@@ -299,6 +312,18 @@ namespace SwVault.AddIn
         }
 
         private static void Run(string what, Func<Task> body) => UiThread.Run(what, body);
+
+        public void OnAddToVault() => Run("Add to vault", async () =>
+        {
+            try
+            {
+                await _commands.AddToVaultAsync(_docs.ActiveDoc);
+            }
+            finally
+            {
+                RefreshActive(); // the document may now have a path in the vault
+            }
+        });
 
         public void OnCheckOut() => Run("Check out", () => _commands.CheckOutAsync(Targets()));
 
@@ -322,6 +347,18 @@ namespace SwVault.AddIn
         });
 
         public void OnRefresh() => Run("Refresh", () => _pane.RefreshAllAsync(sync: true));
+
+        public void OnRequestReview() => Run("Request review", async () =>
+        {
+            var t = Targets();
+            if (t.Count > 0) await _agent.ShowAgentWindowAsync("requestReview", t[0]);
+        });
+
+        public void OnReviews() => Run("Reviews", () => _agent.ShowAgentWindowAsync("reviews"));
+
+        public void OnSubsystems() => Run("Subsystems", () => _agent.ShowAgentWindowAsync("subsystems"));
+
+        public void OnInvite() => Run("Invite people", () => _commands.InvitePeopleAsync());
 
         public void OnSettings() => Run("Vaults", async () =>
         {
