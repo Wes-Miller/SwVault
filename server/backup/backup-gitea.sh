@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Nightly vault backup for the Docker deployment. Run from cron as root, e.g.:
+# Nightly vault backup for the Docker deployments (server/docker and server/linux; the latter
+# schedules it with a systemd timer). Run from cron as root, e.g.:
 #   15 2 * * *  /opt/swvault/server/backup/backup-gitea.sh /opt/swvault/server/docker /mnt/backup
 #
 # Keeps 14 daily archives of the database/config/repositories, and mirrors the LFS content
@@ -17,8 +18,19 @@ docker compose exec -T -u git gitea bash -c "cd /tmp && gitea dump --skip-lfs-da
 docker compose cp gitea:/tmp/swvault-dump.tar.gz "$DEST/daily/gitea-$STAMP.tar.gz"
 docker compose exec -T -u git gitea rm -f /tmp/swvault-dump.tar.gz
 
+# Server settings and identity (server/linux layout): .env with Gitea secrets, Tailscale node
+# state (keeps the same https://... address after a restore), admin token, team.json. Small.
+config=()
+for f in .env team.json data/admin-token data/admin-credentials.txt data/tailscale; do
+  if [[ -e "$COMPOSE_DIR/$f" ]]; then config+=("$f"); fi
+done
+if ((${#config[@]} > 0)); then
+  (umask 077; tar -czf "$DEST/daily/server-config-$STAMP.tar.gz" -C "$COMPOSE_DIR" "${config[@]}")
+fi
+
 # LFS objects are content-addressed and never change, so an additive rsync is a complete backup.
 rsync -a "$COMPOSE_DIR/data/gitea/git/lfs/" "$DEST/lfs/"
 
 ls -1t "$DEST/daily"/gitea-*.tar.gz | tail -n +15 | xargs -r rm -f
+ls -1t "$DEST/daily"/server-config-*.tar.gz 2>/dev/null | tail -n +15 | xargs -r rm -f
 echo "Backup $STAMP complete."

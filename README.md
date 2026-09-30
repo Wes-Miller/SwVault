@@ -30,6 +30,8 @@ SLDWORKS.exe                     named pipe                per-user tray process
 
 See [docs/architecture.md](docs/architecture.md), [docs/admin-guide.md](docs/admin-guide.md) and [docs/user-guide.md](docs/user-guide.md).
 
+**Hosting it yourself:** [docs/self-hosting-linux.md](docs/self-hosting-linux.md) sets up the server on any Linux PC, even on an apartment network with no port forwarding, with one script (`server/linux/setup.sh`). It also produces the config for a team installer, so members only install SwVault and sign in.
+
 ## Repository layout
 
 | Path | What |
@@ -42,7 +44,7 @@ See [docs/architecture.md](docs/architecture.md), [docs/admin-guide.md](docs/adm
 | `tests/` | Unit tests, offline integration tests (fake LFS server), opt-in tests against a real Gitea |
 | `tools/SwApiCheck` | Verifies the SOLIDWORKS API behaviors SwVault relies on (run after SOLIDWORKS upgrades) |
 | `scripts/` | Developer setup: local Gitea, add-in registration |
-| `server/` | Deploying the vault server (Gitea) |
+| `server/` | Deploying the vault server (Gitea). `server/linux` is the one-script setup for a self-hosted Linux PC (Tailscale Funnel + Gitea in Docker) |
 
 ## Developer quick start
 

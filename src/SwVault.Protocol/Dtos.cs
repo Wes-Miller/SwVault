@@ -100,6 +100,17 @@ namespace SwVault.Protocol
         [DataMember(Name = "localRoot", EmitDefaultValue = false)] public string LocalRoot { get; set; }
         [DataMember(Name = "userName", EmitDefaultValue = false)] public string UserName { get; set; }
         [DataMember(Name = "token", EmitDefaultValue = false)] public string Token { get; set; }
+        /// <summary>Server password; the agent exchanges it for an access token and doesn't store it.</summary>
+        [DataMember(Name = "password", EmitDefaultValue = false)] public string Password { get; set; }
+    }
+
+    /// <summary>The team vault this install was packaged for (team.json), if any.</summary>
+    [DataContract]
+    public sealed class TeamInfo
+    {
+        [DataMember(Name = "name")] public string Name { get; set; }
+        [DataMember(Name = "vaultUrl")] public string VaultUrl { get; set; }
+        [DataMember(Name = "localRoot")] public string LocalRoot { get; set; }
     }
 
     [DataContract]

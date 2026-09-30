@@ -12,13 +12,18 @@ internal sealed class RpcDispatcher
     private readonly JobManager _jobs;
     private readonly FileLog _log;
     private readonly Action? _onVaultsChanged;
+    private readonly TeamConfig? _team;
+    private readonly Func<string, string, Task<VaultSession>>? _joinTeam;
 
-    public RpcDispatcher(VaultManager vaults, JobManager jobs, FileLog log, Action? onVaultsChanged = null)
+    public RpcDispatcher(VaultManager vaults, JobManager jobs, FileLog log, Action? onVaultsChanged = null,
+        TeamConfig? team = null, Func<string, string, Task<VaultSession>>? joinTeam = null)
     {
         _vaults = vaults;
         _jobs = jobs;
         _log = log;
         _onVaultsChanged = onVaultsChanged;
+        _team = team;
+        _joinTeam = joinTeam;
     }
 
     public async Task<RpcMessage> DispatchAsync(ClientConnection client, RpcMessage request)
@@ -77,11 +82,26 @@ internal sealed class RpcDispatcher
             case Methods.VaultAdd:
             {
                 var add = Payload<VaultAddRequest>(payload);
-                var credential = !string.IsNullOrEmpty(add.UserName) && !string.IsNullOrEmpty(add.Token) ? new Credential(add.UserName, add.Token) : null;
-                var session = await _vaults.AddAsync(add.RemoteUrl, string.IsNullOrWhiteSpace(add.LocalRoot) ? null : add.LocalRoot, credential).ConfigureAwait(false);
+                VaultSession session;
+                var isTeamVault = _team != null && (string.IsNullOrWhiteSpace(add.RemoteUrl) || string.Equals(add.RemoteUrl.Trim(), _team.VaultUrl, StringComparison.OrdinalIgnoreCase));
+                if (!string.IsNullOrEmpty(add.Password) && isTeamVault && _joinTeam != null)
+                {
+                    session = await _joinTeam(add.UserName ?? "", add.Password).ConfigureAwait(false);
+                }
+                else
+                {
+                    var secret = add.Token;
+                    if (!string.IsNullOrEmpty(add.Password) && !string.IsNullOrEmpty(add.UserName))
+                        secret = await TeamJoin.CreateTokenAsync(new Uri(add.RemoteUrl), add.UserName, add.Password, CancellationToken.None).ConfigureAwait(false);
+                    var credential = !string.IsNullOrEmpty(add.UserName) && !string.IsNullOrEmpty(secret) ? new Credential(add.UserName, secret) : null;
+                    session = await _vaults.AddAsync(add.RemoteUrl, string.IsNullOrWhiteSpace(add.LocalRoot) ? null : add.LocalRoot, credential).ConfigureAwait(false);
+                }
                 _onVaultsChanged?.Invoke();
                 return Describe(session);
             }
+
+            case Methods.TeamGet:
+                return _team == null ? null : new TeamInfo { Name = _team.Name, VaultUrl = _team.VaultUrl, LocalRoot = _team.LocalRoot };
 
             case Methods.VaultSync:
             {

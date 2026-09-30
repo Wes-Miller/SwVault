@@ -8,6 +8,7 @@ SwVault works with any Git LFS server that supports **LFS file locking**. We use
 
 | Option | Cost | Notes |
 |---|---|---|
+| **Linux PC anywhere (recommended)** | free (your PC) | Works on networks you don't control (apartments, dorms, CGNAT): Tailscale Funnel gives it a public HTTPS address with no port forwarding. One script sets up everything, including the team installer config. See **[self-hosting-linux.md](self-hosting-linux.md)**. |
 | CU OIT Container Platform | free today | Needs a faculty/staff sponsor for the namespace. Ask OIT about storage size, upload body-size limits (LFS needs large uploads) and future fees. Use `server/kubernetes/values.yaml`. |
 | Team PC in the shop | one drive | Runs Gitea as a Windows service (`server/windows/install-gitea-service.ps1`). Off-campus members use the CU VPN. Ask CEAS IT/OIT whether VPN clients can reach the PC. |
 | Linux box / VM with Docker | varies | `server/docker/docker-compose.yml` (Gitea + Caddy with automatic HTTPS). |
@@ -27,6 +28,8 @@ Don't run the real vault over plain HTTP: access tokens travel with every reques
 - `[oauth2] ENABLED = true`: lets Git Credential Manager do browser sign-in.
 
 ## 2. Users and permissions
+
+On the Linux PC setup, `server/linux/swvault-admin.sh` does all of this for you (`add-user`, `set-role`, `disable-user`); see [self-hosting-linux.md](self-hosting-linux.md). The manual steps below apply to the other hosting options.
 
 1. Create an account per member (Site Administration → User Accounts), or add a login source (for example GitHub OAuth) so people sign in with an existing account.
 2. Create an organization (for example `fsae`) with teams:
@@ -80,7 +83,7 @@ If the import is interrupted, run it again: files already imported are skipped.
 |---|---|
 | Someone left files checked out | `swvault unlock "<path>"` (admins only), or ask them to Undo Check Out |
 | See all check-outs | `swvault locks` |
-| Onboard a member | Account + team → they install SwVault → tray icon → Vaults... → paste URL, user name, token → Get Latest in the task pane |
+| Onboard a member | Linux PC setup: `swvault-admin.sh add-user <name>`, send them the card and the team installer; they install and sign in. Otherwise: account + team → they install SwVault → tray icon → Vaults... → paste URL, user name, token → Get Latest in the task pane |
 | Check a PC's setup | `swvault doctor` |
 | Logs | `%LOCALAPPDATA%\SwVault\logs` (agent and add-in) |
 

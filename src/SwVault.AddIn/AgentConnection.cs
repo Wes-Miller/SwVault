@@ -166,6 +166,9 @@ namespace SwVault.AddIn
 
         public Task<VaultInfo[]> GetVaultsAsync() => CallAsync<object, VaultInfo[]>(Methods.VaultsList, null);
 
+        /// <summary>The team vault this install was packaged for, or null.</summary>
+        public Task<TeamInfo> GetTeamAsync() => CallAsync<object, TeamInfo>(Methods.TeamGet, null);
+
         public Task<VaultInfo> AddVaultAsync(VaultAddRequest request) => CallAsync<VaultAddRequest, VaultInfo>(Methods.VaultAdd, request);
 
         public Task<VaultInfo> SyncVaultAsync(string vaultId) => CallAsync<VaultRequest, VaultInfo>(Methods.VaultSync, new VaultRequest { VaultId = vaultId });

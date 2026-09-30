@@ -27,6 +27,26 @@ internal sealed class TrayContext : ApplicationContext
         _icon.DoubleClick += (_, _) => ShowVaults();
         _agent.Toast += (title, message) => _ui.BeginInvoke(() => _icon.ShowBalloonTip(8000, title, message, ToolTipIcon.Info));
         BuildMenu();
+
+        // Fresh team install: ask for the user name and password straight away.
+        if (_agent.NeedsTeamSignIn) _ui.BeginInvoke(() => ShowSignIn());
+    }
+
+    private bool _signInOpen;
+
+    private void ShowSignIn()
+    {
+        if (_signInOpen) return;
+        _signInOpen = true;
+        try
+        {
+            using var form = new SignInForm(_agent);
+            form.ShowDialog();
+        }
+        finally
+        {
+            _signInOpen = false;
+        }
     }
 
     private void BuildMenu()
@@ -36,6 +56,7 @@ internal sealed class TrayContext : ApplicationContext
         var title = menu.Items.Add($"SwVault ({_agent.Profile.Name})");
         title.Enabled = false;
         menu.Items.Add(new ToolStripSeparator());
+        if (_agent.NeedsTeamSignIn) menu.Items.Add($"Sign in to {_agent.Team!.Name}...", null, (_, _) => ShowSignIn());
         foreach (var registration in _agent.Vaults.Registrations)
         {
             var item = new ToolStripMenuItem($"Open {registration.Name ?? registration.Id} folder");
@@ -55,6 +76,11 @@ internal sealed class TrayContext : ApplicationContext
 
     private void ShowVaults()
     {
+        if (_agent.NeedsTeamSignIn)
+        {
+            ShowSignIn();
+            return;
+        }
         using var form = new VaultsForm(_agent);
         form.ShowDialog();
     }

@@ -1,4 +1,5 @@
 using Microsoft.Win32;
+using SwVault.Core;
 using SwVault.Core.Client;
 using SwVault.Protocol;
 
@@ -14,6 +15,12 @@ internal sealed class AgentHost : IDisposable
     public SyncLoop Sync { get; }
     public JobManager Jobs { get; }
 
+    /// <summary>The team vault this install was packaged for (team.json), or null.</summary>
+    public TeamConfig? Team { get; }
+
+    /// <summary>True until this PC is connected to a vault while a team.json says which one to join.</summary>
+    public bool NeedsTeamSignIn => Team != null && Vaults.Registrations.Count == 0;
+
     /// <summary>Raised for toast-worthy events; the tray shows them as Windows notifications.</summary>
     public event Action<string, string>? Toast;
 
@@ -23,7 +30,15 @@ internal sealed class AgentHost : IDisposable
         Log = new FileLog(profile.LogDir);
         Vaults = new VaultManager(profile);
         Jobs = new JobManager(Vaults, Broadcast, Log);
-        var dispatcher = new RpcDispatcher(Vaults, Jobs, Log, () => Sync?.Poke());
+        try
+        {
+            Team = TeamConfig.Load();
+        }
+        catch (Exception ex)
+        {
+            Log.Warn("Could not read team.json: " + ex.Message);
+        }
+        var dispatcher = new RpcDispatcher(Vaults, Jobs, Log, () => Sync?.Poke(), Team, JoinTeamAsync);
         Server = new PipeServer(profile.PipeName, dispatcher.DispatchAsync, Log);
         Sync = new SyncLoop(Vaults, Broadcast, RaiseToast, Log);
     }
@@ -35,6 +50,31 @@ internal sealed class AgentHost : IDisposable
         Server.Start();
         Sync.Start();
         _ = Task.Run(ResumePendingAsync);
+    }
+
+    /// <summary>
+    /// First sign-in on a team install: connect with user name and password, then download the
+    /// vault in the background so the files are there when SOLIDWORKS opens.
+    /// </summary>
+    public async Task<VaultSession> JoinTeamAsync(string userName, string password)
+    {
+        var team = Team ?? throw VaultException.NotFound("This SwVault install has no team.json; connect with Vaults... instead.");
+        var session = await TeamJoin.JoinAsync(Vaults, team, userName, password).ConfigureAwait(false);
+        Log.Info($"Joined {team.Name} as {session.User?.Login}");
+        Broadcast(Notifications.StatusChanged, new StatusChangedNotification { VaultId = session.VaultId, FullRefresh = true });
+        Sync.Poke();
+        if (team.DownloadAllOnJoin) _ = Task.Run(() => DownloadAllAsync(session));
+        return session;
+    }
+
+    private async Task DownloadAllAsync(VaultSession session)
+    {
+        RaiseToast("SwVault", $"Signed in. Downloading the {session.Config.Name} files to {session.LocalRoot}...");
+        var job = await Jobs.StartAsync(new JobRequest { Kind = JobKind.GetLatest, VaultId = session.VaultId, AutoApply = true }).ConfigureAwait(false);
+        if (job.State == JobState.Completed)
+            RaiseToast("SwVault", $"All {session.Config.Name} files are in {session.LocalRoot}. Open them from SOLIDWORKS.");
+        else
+            RaiseToast("SwVault", "Downloading the vault didn't finish: " + (job.Error ?? job.State.ToString()) + " Use Get Latest in SOLIDWORKS to retry.");
     }
 
     private void Broadcast(string method, object payload) => Server.Broadcast(method, payload);

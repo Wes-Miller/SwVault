@@ -2,6 +2,16 @@
 
 SwVault keeps the team's SOLIDWORKS files on the vault server and makes sure only one person edits a file at a time.
 
+## Getting set up
+
+1. Close SOLIDWORKS.
+2. Unzip the SwVault installer your admin sent you and double-click **Install SwVault.cmd**. Approve the prompt.
+3. Sign in with the user name and password your admin sent you when SwVault asks.
+4. Your team's files download to the vault folder, for example `C:\SWVault\FSAE`. The SwVault icon in the system tray tells you when they're all there.
+5. Open SOLIDWORKS. The **SwVault** tab and task pane are ready.
+
+Closed the sign-in window? Double-click the SwVault tray icon, or click **Connect vault...** in the SwVault task pane.
+
 ## The basics
 
 - **Your vault folder**, for example `C:\SWVault\FSAE`, is the same path on every team PC. Always open and save vault files from there. Don't put it in OneDrive, Dropbox or Google Drive.
@@ -55,6 +65,6 @@ Only approvers can approve. The admin sets who they are.
 | Conflict | Someone checked in a newer version while you edited an old copy. Save your work as a copy, Undo Check Out, Get Latest, and redo the change on the newest version. |
 | "checked out by you on another computer" | Check it in there, or choose to take over the check-out here. |
 | Can't save a file | It's read-only because you haven't checked it out. Check it out. |
-| Everything offline | Are you on campus or on the CU VPN? Is the tray icon running? |
+| Everything offline | Are you connected to the internet (or on campus / the CU VPN, if your team's server is on campus)? Is the tray icon running? |
 
 Run `swvault doctor` in a terminal for a quick health check of your PC's setup.

@@ -1,4 +1,5 @@
 using System.Text;
+using SwVault.Core.Client;
 using SwVault.Core.Index;
 using SwVault.Core.Util;
 using SwVault.Core.Vault;
@@ -206,5 +207,31 @@ public class WireJsonTests
         var parsed = WireJson.Deserialize<RpcMessage>(WireJson.Serialize(envelope));
         Assert.True(parsed.IsRequest);
         Assert.Equal(json, parsed.Payload);
+    }
+}
+
+public class TeamConfigTests
+{
+    /// <summary>Exactly what server/linux/lib.sh (write_team_json) produces.</summary>
+    [Fact]
+    public void ReadsTeamJsonFromServerSetup()
+    {
+        const string json = """
+            {
+              "name": "FSAE",
+              "vaultUrl": "https://swvault.tail1234.ts.net/fsae/cad.git",
+              "localRoot": "C:\\SWVault\\FSAE",
+              "admin": "wes",
+              "downloadAllOnJoin": true,
+              "solidworksVersion": "2025"
+            }
+            """;
+        var team = Json.Deserialize<TeamConfig>(json)!;
+        Assert.Equal("FSAE", team.Name);
+        Assert.Equal("https://swvault.tail1234.ts.net/fsae/cad.git", team.VaultUrl);
+        Assert.Equal(@"C:\SWVault\FSAE", team.LocalRoot);
+        Assert.Equal("wes", team.Admin);
+        Assert.Equal("2025", team.SolidworksVersion);
+        Assert.True(team.DownloadAllOnJoin);
     }
 }
